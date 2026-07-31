@@ -1,0 +1,64 @@
+# .github/workflows/maven-ci.yml
+name: Java CI with Maven
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Build and test with Maven
+        run: mvn -B clean verify
+
+  security-scan:
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Roda o Trivy pela IMAGEM OFICIAL fixada, via Docker (o runner já tem Docker). Substitui o
+      # `contrib/install.sh` e o download manual do binário — os dois falharam por detalhes que só
+      # a ferramenta oficial resolve (auto-detecção de tag via API rate-limitada; permissão em
+      # /usr/local/bin; nome do asset da release → 404). A imagem `aquasec/trivy:<versão>` é
+      # publicada a cada release (a tag existe com certeza), já traz o binário E os templates em
+      # /contrib, então não há nada a instalar nem html.tpl a baixar. Pinada = reprodutível; o
+      # banco de vulnerabilidades é baixado fresco a cada scan (não congela detecção). Para
+      # atualizar, bumpe a tag da imagem.
+      - name: Pull Trivy image
+        # SEM continue-on-error: se o pull falhar de verdade, o CI acusa (não mascara).
+        run: docker pull aquasec/trivy:0.58.0
+
+      - name: Run Trivy vulnerability scanner
+        # advisory (continue-on-error) como na Fase 1: um achado não derruba o build; sobe o HTML.
+        run: |
+          docker run --rm -v "${PWD}:/workspace" aquasec/trivy:0.58.0 \
+            fs /workspace \
+            --format template --template "@/contrib/html.tpl" \
+            --output /workspace/trivy-report.html \
+            --severity CRITICAL,HIGH,MEDIUM
+        continue-on-error: true
+
+      - name: Upload vulnerability report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trivy-vulnerability-report
+          path: trivy-report.html
+          retention-days: 30

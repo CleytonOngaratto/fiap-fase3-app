@@ -1,0 +1,25 @@
+@startuml CarWorkshopContainer
+!includeurl https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+title Diagrama de Container (C4 - Nivel 2) - Car Workshop API
+
+' Personas
+Person(atendente, "Atendente / Mecanico", "Funcionario da oficina (papel ADMIN) que gerencia cadastros, estoque e Ordens de Servico.")
+Person(cliente, "Cliente", "Proprietario do veiculo que consulta status e aprova/rejeita orcamento.")
+
+' Limite do Sistema
+System_Boundary(carworkshop_boundary, "Car Workshop") {
+
+    Container(api, "Car Workshop API", "Java 17, Quarkus 3.26.3", "Endpoints REST (base /carworkshop/v1) para gestao de OS, clientes, veiculos, servicos e estoque. Clean Architecture / Monolito Modular (7 bounded contexts); autenticacao JWT RS256; OpenAPI/Swagger.")
+
+    ContainerDb(database, "Banco de Dados", "PostgreSQL 16", "Persiste usuarios, clientes, veiculos, servicos, pecas e Ordens de Servico. Schema versionado por migrations Flyway.")
+}
+
+' Relacionamentos
+Rel(atendente, api, "Gerencia OS, estoque e cadastros", "HTTPS/JSON, Bearer JWT")
+Rel(cliente, api, "Consulta status e aprova/rejeita orcamento", "HTTPS/JSON (publico)")
+
+Rel(api, database, "Le e escreve (ORM Panache + Flyway)", "JDBC/SQL")
+
+SHOW_LEGEND()
+@enduml

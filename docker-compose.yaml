@@ -1,0 +1,58 @@
+# Stack de dev local: app (Quarkus) + Postgres.
+# `version:` foi removido (obsoleto no Compose v2).
+# SonarQube fica num profile separado: NÃO sobe no fluxo padrão do avaliador.
+#
+# Uso:
+#   docker compose up --build           → sobe banco + app
+#   docker compose --profile sonar up   → inclui o SonarQube
+#   Variáveis opcionais em .env (ver .env.example), ex.: DB_PORT_HOST.
+
+services:
+  oficina_app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: car-workshop-api:local
+    container_name: oficina_app
+    ports:
+      - "8080:8080"
+    environment:
+      QUARKUS_DATASOURCE_JDBC_URL: jdbc:postgresql://oficina_db:5432/oficina_db
+      QUARKUS_DATASOURCE_USERNAME: ${POSTGRES_USER:-postgres}
+      QUARKUS_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      SECRET_KEY: ${SECRET_KEY:-oficina-secret-key-dev}
+    depends_on:
+      oficina_db:
+        condition: service_healthy
+
+  oficina_db:
+    image: postgres:16
+    container_name: oficina_db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-oficina_db}
+    ports:
+      - "${DB_PORT_HOST:-5433}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-oficina_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  sonarqube:
+    image: sonarqube:10.4.1-community
+    container_name: oficina_sonar
+    profiles: ["sonar"]
+    ports:
+      - "9000:9000"
+    environment:
+      - SONAR_FORCEAUTHENTICATION=false
+    volumes:
+      - sonarqube_data:/opt/sonarqube/data
+
+volumes:
+  postgres_data:
+  sonarqube_data:

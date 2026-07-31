@@ -1,0 +1,34 @@
+# Autoescala horizontal da API. O demo do vídeo é por CPU: gerar carga → réplicas sobem.
+# Requer o metrics-server ligado (`minikube addons enable metrics-server`), senão as
+# métricas ficam <unknown> e não escala.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: car-workshop-api
+  namespace: car-workshop
+  labels:
+    app: car-workshop-api
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: car-workshop-api
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    # Métrica principal (a que o gerador de carga move no demo).
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 60
+    # Métrica secundária, só para cumprir a redação do edital ("CPU/memória").
+    # ⚠️ A JVM não devolve heap ao SO: se em teste a memória fixar as réplicas no
+    # máximo, suba o request de memória do deployment OU remova este bloco (o demo é por CPU).
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80

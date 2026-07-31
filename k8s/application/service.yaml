@@ -1,0 +1,17 @@
+# Service interno da API (ClusterIP). Acesso externo é via `kubectl port-forward`
+# (ou `minikube service`) no demo — não expomos NodePort/LoadBalancer aqui.
+apiVersion: v1
+kind: Service
+metadata:
+  name: car-workshop-api
+  namespace: car-workshop
+  labels:
+    app: car-workshop-api
+spec:
+  type: ClusterIP
+  selector:
+    app: car-workshop-api
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
