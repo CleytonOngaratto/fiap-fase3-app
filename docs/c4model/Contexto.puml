@@ -1,0 +1,18 @@
+@startuml CarWorkshopContext
+!includeurl https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Context.puml
+
+title Diagrama de Contexto (C4 - Nivel 1) - Car Workshop API
+
+' Personas (Atores)
+Person(atendente, "Atendente / Mecanico", "Funcionario da oficina (papel ADMIN). Cadastra clientes, veiculos, servicos e pecas, e conduz o ciclo de vida das Ordens de Servico.")
+Person(cliente, "Cliente", "Proprietario do veiculo. Pelo portal publico de acompanhamento, consulta o status da OS e aprova ou rejeita o orcamento.")
+
+' Sistema Principal
+System(carWorkshop, "Car Workshop API", "API REST de gestao de oficina mecanica: clientes, veiculos, catalogo de servicos, estoque de pecas e o ciclo de vida das Ordens de Servico.")
+
+' Relacionamentos
+Rel(atendente, carWorkshop, "Gerencia OS, estoque e cadastros (autenticado)", "HTTPS/JSON, Bearer JWT")
+Rel(cliente, carWorkshop, "Consulta status e aprova/rejeita orcamento", "HTTPS/JSON (publico)")
+
+SHOW_LEGEND()
+@enduml

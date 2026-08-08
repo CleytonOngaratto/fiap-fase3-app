@@ -1,0 +1,38 @@
+# O build é multi-stage: o contexto precisa de `pom.xml` + `src/`.
+# Tudo o que NÃO é necessário para buildar a imagem fica de fora.
+
+# Artefatos de build (a imagem builda no próprio container)
+target/
+build/
+.quarkus/
+
+# VCS / IDE
+.git/
+.gitignore
+.idea/
+.vscode/
+.settings/
+.factorypath
+.project
+.classpath
+*.iml
+*.ipr
+*.iws
+bin/
+out/
+
+# Infra / docs não usados no build da imagem
+*.md
+k8s/
+infra/
+.github/
+docs/
+
+# Ambiente / logs / OS
+.env
+*.log
+hs_err_pid*
+.DS_Store
+Thumbs.db
+*.swp
+*.swo

@@ -1,0 +1,7 @@
+# Namespace que isola todos os recursos da solução (app + banco).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: car-workshop
+  labels:
+    app.kubernetes.io/part-of: car-workshop

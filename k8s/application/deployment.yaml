@@ -1,0 +1,83 @@
+# Deployment da API. replicas: 2 é o piso; o HPA (hpa.yaml) assume o número real depois.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: car-workshop-api
+  namespace: car-workshop
+  labels:
+    app: car-workshop-api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: car-workshop-api
+  template:
+    metadata:
+      labels:
+        app: car-workshop-api
+    spec:
+      # Roda não-root (a imagem cria o uid 1001 no Dockerfile).
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+      containers:
+        - name: car-workshop-api
+          image: car-workshop-api:local
+          # IfNotPresent: usa a imagem carregada via `minikube image load` (não vai ao registry).
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          # Config não-sensível + segredos, ambos como env vars.
+          envFrom:
+            - configMapRef:
+                name: car-workshop-api-config
+            - secretRef:
+                name: car-workshop-api-secret
+          # 🔴 Probes SEPARADAS e com o root-path no caminho.
+          # startupProbe: segura liveness E readiness até a app terminar de subir.
+          # Boot lento (Quarkus + Flyway + conexão no banco), ainda mais sob CPU apertada
+          # num scale-up simultâneo (warmup de várias JVMs). Até 30×5s = 150s de tolerância;
+          # depois que passa 1x, liveness/readiness assumem. Evita restart à toa no warmup
+          # (era o Exit 143/SIGTERM por liveness timeout visto no cold start).
+          startupProbe:
+            httpGet:
+              path: /carworkshop/v1/q/health/live
+              port: 8080
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 30
+          # Liveness NÃO depende do banco: aponta para /live. Se apontasse para /ready
+          # (que inclui o check do Postgres), um blip do banco reiniciaria TODOS os pods.
+          # initialDelaySeconds: 0 — a startupProbe acima já cobre a janela de boot.
+          livenessProbe:
+            httpGet:
+              path: /carworkshop/v1/q/health/live
+              port: 8080
+            initialDelaySeconds: 0
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          # Readiness inclui o Postgres: o pod só recebe tráfego quando o banco responde.
+          # Folgado no boot (a app espera o DB + roda Flyway).
+          readinessProbe:
+            httpGet:
+              path: /carworkshop/v1/q/health/ready
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 12
+          # 🔴 requests.cpu é OBRIGATÓRIO: o HPA calcula o % de utilização sobre o request.
+          # Sem ele o HPA mostra <unknown>/60% e nunca escala.
+          resources:
+            requests:
+              cpu: 200m
+              # 384Mi (não 256Mi): a JVM segura ~180Mi de heap; com request 256Mi isso
+              # dava ~70%, colado no target de 80% do HPA — sob carga de CPU a memória
+              # cruzaria 80% e prenderia réplicas no alto (JVM não devolve heap),
+              # mascarando a autoescala POR CPU. Com 384Mi, ~180Mi vira ~47% → folga.
+              memory: 384Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi

@@ -1,0 +1,19 @@
+# Configuração NÃO sensível da app. O Quarkus lê estas env vars automaticamente
+# (override das propriedades de application.properties).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: car-workshop-api-config
+  namespace: car-workshop
+  labels:
+    app: car-workshop-api
+data:
+  # Aponta para o Service do banco (FQDN in-cluster).
+  QUARKUS_DATASOURCE_JDBC_URL: jdbc:postgresql://postgres.car-workshop.svc.cluster.local:5432/oficina_db
+  # Escuta em todas as interfaces do container (sem isso o Quarkus fica em localhost).
+  QUARKUS_HTTP_HOST: "0.0.0.0"
+  # Root-path da API (health e endpoints ficam sob /carworkshop/v1).
+  QUARKUS_HTTP_ROOT_PATH: /carworkshop/v1
+  # Flyway roda as migrations no boot da app.
+  QUARKUS_FLYWAY_MIGRATE_AT_START: "true"
+  QUARKUS_LOG_LEVEL: INFO
