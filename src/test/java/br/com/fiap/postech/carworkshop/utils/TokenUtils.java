@@ -4,6 +4,7 @@ import io.smallrye.jwt.build.Jwt;
 
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.Set;
 
 public class TokenUtils {
 
@@ -21,5 +22,18 @@ public class TokenUtils {
     public static String generateUserToken() {
         return generateTokenString("testUser", "USER");
     }
-}
 
+    /** Reproduz offline o token que a Lambda do Bloco 5 emite ao validar um CPF (F10). */
+    public static String generateCustomerToken(String cpf) {
+        return Jwt.issuer("https://oficina-api.com")
+                .subject(cpf)
+                .upn(cpf)
+                .groups(Set.of("CUSTOMER"))
+                .claim("cpf", cpf)
+                .sign();
+    }
+
+    public static String generateCustomerToken() {
+        return generateCustomerToken("52998224725");
+    }
+}

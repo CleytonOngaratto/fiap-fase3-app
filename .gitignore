@@ -83,8 +83,12 @@ docs/docsocultos/
 
 # ==========================================
 # Fase 3 — nunca versionar segredos/credenciais
-# (os PEMs de src/main/resources seguem versionados até a migração p/ SSM — F9, Bloco 4)
 # ==========================================
+# Par RSA do JWT (F9) - dev copia de <raiz>/.secrets/; ver README.
+# O par de src/test/resources/ e OUTRO, descartavel, e segue versionado de proposito.
+secrets/
+src/main/resources/*.pem
+
 .secrets/
 .aws/
 kubeconfig*

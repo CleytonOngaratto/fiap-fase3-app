@@ -17,10 +17,12 @@ import br.com.fiap.postech.carworkshop.workorder.usecase.port.out.AutoServiceDat
 import br.com.fiap.postech.carworkshop.workorder.usecase.port.out.CustomerDataPort;
 import br.com.fiap.postech.carworkshop.workorder.usecase.port.out.InventoryDataPort;
 import br.com.fiap.postech.carworkshop.workorder.usecase.port.out.VehicleDataPort;
+import br.com.fiap.postech.carworkshop.workorder.usecase.port.out.WorkOrderMetricsPort;
 import br.com.fiap.postech.carworkshop.workorder.usecase.port.out.WorkOrderNotificationPort;
 import br.com.fiap.postech.carworkshop.workorder.usecase.port.out.WorkOrderRepositoryPort;
 import lombok.extern.slf4j.Slf4j;
 
+import java.time.Duration;
 import java.time.temporal.ChronoUnit;
 import java.util.Collections;
 import java.util.Comparator;
@@ -36,19 +38,22 @@ public class WorkOrderInteractor implements WorkOrderUseCase {
     private final AutoServiceDataPort autoServiceDataPort;
     private final InventoryDataPort inventoryDataPort;
     private final WorkOrderNotificationPort notificationPort;
+    private final WorkOrderMetricsPort metricsPort;
 
     public WorkOrderInteractor(WorkOrderRepositoryPort workOrderRepository,
                                CustomerDataPort customerDataPort,
                                VehicleDataPort vehicleDataPort,
                                AutoServiceDataPort autoServiceDataPort,
                                InventoryDataPort inventoryDataPort,
-                               WorkOrderNotificationPort notificationPort) {
+                               WorkOrderNotificationPort notificationPort,
+                               WorkOrderMetricsPort metricsPort) {
         this.workOrderRepository = workOrderRepository;
         this.customerDataPort = customerDataPort;
         this.vehicleDataPort = vehicleDataPort;
         this.autoServiceDataPort = autoServiceDataPort;
         this.inventoryDataPort = inventoryDataPort;
         this.notificationPort = notificationPort;
+        this.metricsPort = metricsPort;
     }
 
     @Override
@@ -89,6 +94,7 @@ public class WorkOrderInteractor implements WorkOrderUseCase {
         );
         WorkOrder saved = workOrderRepository.save(workOrder);
         log.info("Work Order {} created.", saved.getId());
+        metricsPort.recordStatusChange(saved.getStatus());
         return WorkOrderResponse.from(saved);
     }
 
@@ -149,6 +155,7 @@ public class WorkOrderInteractor implements WorkOrderUseCase {
         workOrder.generateBudget();
         WorkOrder saved = workOrderRepository.save(workOrder);
         log.info("Diagnosis for Work Order {} completed. Budget: R$ {}", id, saved.getBudgetValue());
+        metricsPort.recordStatusChange(saved.getStatus());
         return DiagnosisResponse.from(saved);
     }
 
@@ -159,6 +166,8 @@ public class WorkOrderInteractor implements WorkOrderUseCase {
         workOrder.completeService();
         WorkOrder saved = workOrderRepository.save(workOrder);
         log.info("Work Order {} completed.", id);
+        metricsPort.recordStatusChange(saved.getStatus());
+        metricsPort.recordCompletion(Duration.between(saved.getCreationDate(), saved.getEndDate()));
         notificationPort.notifyCompleted(new WorkOrderNotificationPort.CompletedNotification(
                 saved.getId(), saved.getCustomerId(), saved.getCustomerEmail()));
         return WorkOrderDetailResponse.from(saved);
@@ -171,6 +180,7 @@ public class WorkOrderInteractor implements WorkOrderUseCase {
         workOrder.deliverVehicle();
         WorkOrder saved = workOrderRepository.save(workOrder);
         log.info("Work Order {} delivered.", id);
+        metricsPort.recordStatusChange(saved.getStatus());
         return WorkOrderDetailResponse.from(saved);
     }
 
@@ -189,6 +199,7 @@ public class WorkOrderInteractor implements WorkOrderUseCase {
         workOrder.getParts().forEach(part -> inventoryDataPort.consumeStock(part.getId()));
         WorkOrder saved = workOrderRepository.save(workOrder);
         log.info("Work Order {} approved. Status: {}", id, saved.getStatus());
+        metricsPort.recordStatusChange(saved.getStatus());
         return WorkOrderTrackingResponse.from(saved);
     }
 
@@ -199,6 +210,7 @@ public class WorkOrderInteractor implements WorkOrderUseCase {
         workOrder.rejectBudget();
         WorkOrder saved = workOrderRepository.save(workOrder);
         log.info("Work Order {} rejected. Status: {}", id, saved.getStatus());
+        metricsPort.recordStatusChange(saved.getStatus());
         return WorkOrderTrackingResponse.from(saved);
     }
 

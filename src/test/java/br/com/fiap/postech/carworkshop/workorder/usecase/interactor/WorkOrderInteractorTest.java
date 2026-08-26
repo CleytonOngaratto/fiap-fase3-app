@@ -23,6 +23,7 @@ import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -54,6 +55,9 @@ class WorkOrderInteractorTest {
 
     @Mock
     WorkOrderNotificationPort notificationPort;
+
+    @Mock
+    WorkOrderMetricsPort metricsPort;
 
     private AutoService autoServiceDomain;
     private PartsAndSupply partsDomain;
@@ -301,5 +305,61 @@ class WorkOrderInteractorTest {
         Double avg = interactor.getAverageCompletionTimeInHours();
         assertNotNull(avg);
         assertTrue(avg > 0);
+    }
+
+    @Test
+    void testApproveWorkOrder_RecordsStatusMetric() {
+        WorkOrder wo = workOrderInStatus(StatusWO.PENDING_APPROVAL);
+        when(workOrderRepository.findById(1L)).thenReturn(Optional.of(wo));
+        when(workOrderRepository.save(any())).thenReturn(wo);
+
+        interactor.approveWorkOrder(1L);
+
+        verify(metricsPort).recordStatusChange(StatusWO.IN_PROGRESS);
+    }
+
+    @Test
+    void testRejectWorkOrder_RecordsStatusMetric() {
+        WorkOrder wo = workOrderInStatus(StatusWO.PENDING_APPROVAL);
+        when(workOrderRepository.findById(1L)).thenReturn(Optional.of(wo));
+        when(workOrderRepository.save(any())).thenReturn(wo);
+
+        interactor.rejectWorkOrder(1L);
+
+        verify(metricsPort).recordStatusChange(StatusWO.CANCELED);
+    }
+
+    @Test
+    void testCompleteWorkOrder_RecordsStatusAndCompletionTime() {
+        WorkOrder wo = workOrderInStatus(StatusWO.IN_PROGRESS);
+        when(workOrderRepository.findById(1L)).thenReturn(Optional.of(wo));
+        when(workOrderRepository.save(any())).thenReturn(wo);
+        doNothing().when(notificationPort).notifyCompleted(any());
+
+        interactor.completeWorkOrder(1L);
+
+        verify(metricsPort).recordStatusChange(StatusWO.COMPLETED);
+        verify(metricsPort).recordCompletion(any(Duration.class));
+    }
+
+    @Test
+    void testDeliverWorkOrder_RecordsStatusMetric() {
+        WorkOrder wo = workOrderInStatus(StatusWO.COMPLETED);
+        when(workOrderRepository.findById(1L)).thenReturn(Optional.of(wo));
+        when(workOrderRepository.save(any())).thenReturn(wo);
+
+        interactor.deliverWorkOrder(1L);
+
+        verify(metricsPort).recordStatusChange(StatusWO.DELIVERED);
+    }
+
+    @Test
+    void testCompleteWorkOrder_NotFound_RecordsNoMetric() {
+        when(workOrderRepository.findById(999L)).thenReturn(Optional.empty());
+
+        assertThrows(EntityNotFoundException.class, () -> interactor.completeWorkOrder(999L));
+
+        verify(metricsPort, never()).recordStatusChange(any());
+        verify(metricsPort, never()).recordCompletion(any());
     }
 }

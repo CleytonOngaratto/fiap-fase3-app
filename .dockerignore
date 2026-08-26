@@ -36,3 +36,7 @@ hs_err_pid*
 Thumbs.db
 *.swp
 *.swo
+
+# F9: o par RSA nunca entra na imagem — em runtime vem de volume (Secret no k8s, bind mount no compose).
+secrets/
+*.pem
