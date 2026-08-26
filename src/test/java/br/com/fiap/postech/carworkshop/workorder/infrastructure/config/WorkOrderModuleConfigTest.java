@@ -7,6 +7,7 @@ import br.com.fiap.postech.carworkshop.workorder.usecase.port.out.AutoServiceDat
 import br.com.fiap.postech.carworkshop.workorder.usecase.port.out.CustomerDataPort;
 import br.com.fiap.postech.carworkshop.workorder.usecase.port.out.InventoryDataPort;
 import br.com.fiap.postech.carworkshop.workorder.usecase.port.out.VehicleDataPort;
+import br.com.fiap.postech.carworkshop.workorder.usecase.port.out.WorkOrderMetricsPort;
 import br.com.fiap.postech.carworkshop.workorder.usecase.port.out.WorkOrderNotificationPort;
 import br.com.fiap.postech.carworkshop.workorder.usecase.port.out.WorkOrderRepositoryPort;
 import org.junit.jupiter.api.Test;
@@ -25,7 +26,8 @@ class WorkOrderModuleConfigTest {
                 mock(VehicleDataPort.class),
                 mock(AutoServiceDataPort.class),
                 mock(InventoryDataPort.class),
-                mock(WorkOrderNotificationPort.class));
+                mock(WorkOrderNotificationPort.class),
+                mock(WorkOrderMetricsPort.class));
 
         assertNotNull(useCase);
         assertInstanceOf(WorkOrderInteractor.class, useCase);

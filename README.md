@@ -30,6 +30,7 @@ a camada de infraestrutura: **containerização** (Dockerfile multi-stage), **ma
 - [Deploy em Kubernetes (Minikube)](#deploy-em-kubernetes-minikube)
 - [Provisionamento com Terraform (IaC)](#provisionamento-com-terraform-iac)
 - [Testes](#testes)
+- [Observabilidade](#observabilidade)
 - [Qualidade e Segurança](#qualidade-e-segurança)
 - [CI/CD](#cicd)
 - [Melhorias Futuras](#melhorias-futuras)
@@ -87,7 +88,11 @@ O `Dockerfile` é **multi-stage** — o Maven compila **dentro da imagem**. Não
 git clone https://github.com/CleytonOngaratto/FIAPchallenge.git
 cd FIAPchallenge
 
-# 2. Suba a stack completa (app + banco PostgreSQL)
+# 2. Provisione o par RSA do JWT — a chave não vive mais no repositório (F9).
+#    Copie o par de <raiz-do-projeto>/.secrets/ para ./secrets/ (gitignored):
+mkdir -p secrets && cp ../.secrets/*.pem secrets/
+
+# 3. Suba a stack completa (app + banco PostgreSQL)
 docker compose up --build
 ```
 
@@ -122,7 +127,10 @@ docker compose --profile sonar up      # inclui o SonarQube em http://localhost:
 # 1. Inicia apenas o banco (exposto no host em 5433, que é o default do datasource dev)
 docker compose up -d oficina_db
 
-# 2. Sobe a aplicação com live coding
+# 2. Garanta que ./secrets/ tem o par RSA (mesmo passo do Quick Start)
+mkdir -p secrets && cp ../.secrets/*.pem secrets/
+
+# 3. Sobe a aplicação com live coding
 ./mvnw quarkus:dev
 ```
 
@@ -140,21 +148,45 @@ A aplicação consome estas variáveis (o Quarkus faz o *override* automático d
 | Variável                          | Descrição                                    | Padrão (dev local)                              |
 |-----------------------------------|----------------------------------------------|-------------------------------------------------|
 | `SECRET_KEY`                      | Chave usada no hash de senhas (SHA-256 + salt)| `oficina-secret-key-dev`                        |
-| `QUARKUS_DATASOURCE_JDBC_URL`     | URL JDBC do PostgreSQL                        | `jdbc:postgresql://localhost:5433/oficina_db`   |
-| `QUARKUS_DATASOURCE_USERNAME`     | Usuário do banco                             | `postgres`                                      |
-| `QUARKUS_DATASOURCE_PASSWORD`     | Senha do banco                               | `postgres`                                      |
+| `DB_HOST`                         | Host do banco — **só o host**, sem porta      | `localhost`                                     |
+| `DB_PORT`                         | Porta do banco                                | `5433`                                          |
+| `DB_NAME`                         | Nome do banco                                 | `oficina_db`                                    |
+| `DB_USERNAME`                     | Usuário do banco                              | `postgres`                                      |
+| `DB_PASSWORD`                     | Senha do banco                                | `postgres`                                      |
+| `DB_SSLMODE`                      | `sslmode` da JDBC URL                         | `disable`                                       |
+| `JWT_PUBLIC_KEY_LOCATION`         | Chave RSA **pública** (valida o token)        | `file:./secrets/publicKey.pem`                  |
+| `JWT_PRIVATE_KEY_LOCATION`        | Chave RSA **privada** (assina o token)        | `file:./secrets/privateKey.pem`                 |
+
+> **Por que `DB_HOST` e `DB_PORT` separados:** é exatamente o formato do contrato do RDS no SSM
+> (`/fase3/rds/endpoint` é o host **sem** porta, e a porta vem em `/fase3/rds/port`). A JDBC URL é
+> montada a partir deles no `application.properties`, então o deploy não precisa concatenar nada.
+
+> **`DB_SSLMODE`:** o RDS sobe com `rds.force_ssl = 1`, então em nuvem o valor é **`require`** — o
+> pgjdbc negociaria TLS sozinho com o default `prefer`, mas aqui a exigência fica explícita em vez de
+> depender de um default de driver. No Postgres local do compose, `disable`.
+
+> **Chave JWT (F9):** o par RSA **não** está no repositório nem dentro da imagem. Em dev ele vem de
+> `./secrets/` (gitignored — ver Quick Start, passo 2); em produção vem do **SSM SecureString** para
+> um **Secret do Kubernetes montado como volume**, e as duas variáveis acima apontam para o
+> `mountPath`. A app precisa das **duas** chaves: ela valida o token do cliente (emitido pela Lambda)
+> e assina o token de admin do `/auth/login`.
 
 > No `docker compose` esses valores já são injetados (a app aponta para o service `oficina_db` na
-> rede interna). No Kubernetes vêm do **ConfigMap** (não sensível) + **Secret** (`SECRET_KEY` e
-> credenciais) — ver seção de deploy.
+> rede interna). No Kubernetes vêm do **ConfigMap** (não sensível) + **Secret** (`SECRET_KEY`,
+> credenciais do RDS e chave JWT) — ver seção de deploy.
 
 ---
 
 ## Autenticação JWT
 
 Endpoints administrativos exigem um token JWT no header `Authorization: Bearer <token>` e o papel
-`ADMIN`. Os endpoints de acompanhamento (`/tracking/*`) e de autenticação (`/auth/*`) são
-**públicos**. Tokens (RS256, SmallRye JWT) expiram em **1 hora**.
+`ADMIN`. Os endpoints de acompanhamento (`/tracking/*`) exigem **`CUSTOMER` ou `ADMIN`**. Só
+`/auth/*` é **público**. Tokens (RS256, SmallRye JWT) expiram em **1 hora**.
+
+> **Token de cliente (F10):** quem emite não é esta app — é a **Lambda de autenticação por CPF**
+> (repositório `fiap-fase3-auth-serverless`). Ela assina com a **mesma chave RSA**, o mesmo issuer
+> (`https://oficina-api.com`), `groups=["CUSTOMER"]` e uma claim `cpf`. A app apenas **valida**.
+> `/auth/login` continua existindo e emite o token de `ADMIN` da operação interna.
 
 ### Passo a passo
 
@@ -189,7 +221,7 @@ curl -s http://localhost:8080/carworkshop/v1/customers/get-all \
 | Serviços             | `/service`             | ADMIN   | Catálogo de serviços com precificação            |
 | Peças e Suprimentos  | `/parts-and-supplies`  | ADMIN   | Estoque de peças com controle de quantidade      |
 | Ordens de Serviço    | `/work-orders`         | ADMIN   | Criação e gestão do ciclo de vida completo       |
-| Acompanhamento       | `/tracking`            | Público | Portal do cliente: consulta e aprovação/rejeição |
+| Acompanhamento       | `/tracking`            | CUSTOMER ou ADMIN | Portal do cliente: consulta e aprovação/rejeição |
 
 Para **exemplos completos de cada endpoint** (payloads, parâmetros e respostas), use o **Swagger UI**
 (`/carworkshop/v1/swagger-ui`): o botão **Try it out** executa a chamada real e mostra o `curl`
@@ -212,8 +244,10 @@ curl -s -X POST http://localhost:8080/carworkshop/v1/work-orders \
   -H "Authorization: Bearer $TOKEN" \
   -d '{"customer_id":1,"vehicle_id":1,"service_ids":[1]}' | jq .
 
-# O cliente acompanha a OS pelo portal público (sem token)
-curl -s http://localhost:8080/carworkshop/v1/tracking/1 | jq .
+# O cliente acompanha a OS com o token que a Lambda emitiu a partir do CPF dele
+# (em dev, um token de ADMIN também abre a rota)
+curl -s http://localhost:8080/carworkshop/v1/tracking/1 \
+  -H "Authorization: Bearer $TOKEN" | jq .
 ```
 
 ---
@@ -514,6 +548,47 @@ O relatório de cobertura HTML é gerado em `target/site/jacoco/index.html` apó
 
 ---
 
+## Observabilidade
+
+A instrumentação vive na aplicação; os dashboards e alertas são montados no **New Relic**, que
+consome as três saídas abaixo.
+
+| Saída | Onde | O que entrega |
+|---|---|---|
+| **Logs JSON** | stdout (`quarkus-logging-json`) | Cada evento sai como um objeto JSON com `service.name`, nível, logger, stack trace e o **MDC** — ingerível direto, sem parser de texto. |
+| **Métricas** | `GET /carworkshop/v1/q/metrics` | Formato Prometheus via Micrometer: JVM (heap, GC, threads), HTTP server (latência e contagem por rota/status) e as métricas de negócio abaixo. |
+| **Correlação** | header `X-Trace-Id` | Um `traceId` por requisição, no MDC de todas as linhas de log daquela requisição. |
+
+**Correlação de requisições.** [`TraceIdFilter`](src/main/java/br/com/fiap/postech/carworkshop/shared/infrastructure/observability/TraceIdFilter.java)
+põe um `traceId` no MDC no início de cada requisição e o devolve no header `X-Trace-Id`. Se o
+chamador já mandou um `X-Trace-Id`, ele é **reaproveitado** em vez de substituído — é isso que
+mantém a correlação de ponta a ponta quando a chamada vem pelo API Gateway/Lambda, em vez de a
+trilha recomeçar na borda do cluster. O MDC é limpo na resposta: as threads são reusadas do pool e
+um resto de MDC carimbaria a requisição seguinte com o id da anterior.
+
+```bash
+curl -si http://localhost:8080/carworkshop/v1/q/health/ready | grep -i x-trace-id
+curl -s  http://localhost:8080/carworkshop/v1/q/metrics | grep workorder
+```
+
+**Métricas de negócio.** Derivadas das transições de status que os casos de uso já executam —
+**nenhuma migration nova** foi necessária:
+
+| Métrica | Tipo | Tags | Alimenta |
+|---|---|---|---|
+| `workorder.status.changes` | counter | `status` | Volume diário de OS e distribuição entre Diagnóstico / Execução / Finalização |
+| `workorder.completion.time` | timer | — | Tempo médio de atendimento (criação → conclusão) |
+
+O caminho é `WorkOrderInteractor` → `WorkOrderMetricsPort` (porta de saída, Java puro) →
+`WorkOrderMetricsAdapter` (Micrometer). A porta existe para que o caso de uso não conheça o
+Micrometer: a regra de arquitetura `usecase ∌ infrastructure` é **estrita** e quebra o build se for
+violada — ver [Arquitetura](#arquitetura).
+
+> Em dev e nos testes o log JSON fica **desligado** (`%dev`/`%test`), porque no terminal ele só
+> atrapalha a leitura. Em container ele é o default.
+
+---
+
 ## Qualidade e Segurança
 
 Duas frentes cuidam da saúde do código e da segurança da aplicação: **análise estática** (SonarQube)
@@ -559,7 +634,16 @@ docker run --rm -v "${PWD}:/workspace" aquasec/trivy:0.58.0 \
 - **Zero credencial hardcoded** nos workflows e no Terraform (tudo via GitHub Secrets / variáveis sem
   default; `terraform.tfvars` no `.gitignore`).
 - Imagem roda **não-root** (uid 1001).
-- O Secret do Kubernetes carrega **apenas** credenciais de banco + `SECRET_KEY`.
+- **Nenhuma chave RSA no repositório nem dentro da imagem.** O par do JWT era commitado em
+  `src/main/resources/` e ia assado no classpath; agora vem de `./secrets/` (gitignored) em dev e de
+  um **Secret do Kubernetes montado como volume** em produção, alimentado pelo **SSM SecureString**.
+  O par que estava commitado foi **aposentado** — o par de produção e o par de teste são novos e
+  distintos entre si.
+  > O par antigo continua no histórico do git e deve ser tratado como comprometido. O que o
+  > neutraliza não é apagá-lo do histórico, e sim nada mais confiar nele.
+- O par RSA em `src/test/resources/` é uma **fixture de teste** descartável, versionada de propósito:
+  os testes assinam tokens offline com ela e ela nunca protege nada em execução real.
+- O Secret do Kubernetes carrega **apenas** credenciais de banco, `SECRET_KEY` e a chave JWT.
 
 ---
 
@@ -584,10 +668,6 @@ GitHub Actions cobre o fluxo completo exigido pela Fase 2:
 
 ## Melhorias Futuras
 
-**Chave JWT fora do repositório/imagem:** a chave privada JWT (`src/main/resources/privateKey.pem`)
-hoje é commitada e vai assada na imagem (classpath). A correção ideal — fora do escopo desta fase — é
-**tirar a chave do repo/imagem** e montá-la de um Secret/volume do Kubernetes em runtime.
-
 **Ambiente AWS/EKS:** o alvo provisionado nesta fase é o Minikube. Um `environments/aws-eks/` (AWS
 Academy, via LabRole) fica como trabalho futuro — lá o Terraform criaria o cluster nativamente
 (`aws_eks_cluster` + node group), também sem nenhuma credencial hardcoded.
@@ -610,6 +690,8 @@ Academy, via LabRole) fica como trabalho futuro — lá o Terraform criaria o cl
 | MapStruct                   | 1.5.5    | Mapeamento Domain ↔ JPA Entity                |
 | Lombok                      | 1.18.30  | Redução de boilerplate (compile-time)         |
 | SmallRye OpenAPI            | —        | Documentação Swagger automática               |
+| Quarkus Logging JSON        | —        | Logs estruturados p/ ingestão no New Relic    |
+| Micrometer + Prometheus     | —        | Métricas JVM, HTTP e de negócio (`/q/metrics`)|
 | JUnit 5 · Mockito · REST-Assured · ArchUnit | — | Testes: unidade, HTTP e arquitetura        |
 | JaCoCo                      | 0.8.12   | Cobertura de testes (gate de 75% no `pom.xml`)|
 | Docker + Docker Compose     | —        | Containerização (Dockerfile multi-stage)      |

@@ -6,6 +6,7 @@ import br.com.fiap.postech.carworkshop.workorder.usecase.port.out.AutoServiceDat
 import br.com.fiap.postech.carworkshop.workorder.usecase.port.out.CustomerDataPort;
 import br.com.fiap.postech.carworkshop.workorder.usecase.port.out.InventoryDataPort;
 import br.com.fiap.postech.carworkshop.workorder.usecase.port.out.VehicleDataPort;
+import br.com.fiap.postech.carworkshop.workorder.usecase.port.out.WorkOrderMetricsPort;
 import br.com.fiap.postech.carworkshop.workorder.usecase.port.out.WorkOrderNotificationPort;
 import br.com.fiap.postech.carworkshop.workorder.usecase.port.out.WorkOrderRepositoryPort;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -26,8 +27,9 @@ public class WorkOrderModuleConfig {
                                              VehicleDataPort vehicleDataPort,
                                              AutoServiceDataPort autoServiceDataPort,
                                              InventoryDataPort inventoryDataPort,
-                                             WorkOrderNotificationPort notificationPort) {
+                                             WorkOrderNotificationPort notificationPort,
+                                             WorkOrderMetricsPort metricsPort) {
         return new WorkOrderInteractor(workOrderRepository, customerDataPort, vehicleDataPort,
-                autoServiceDataPort, inventoryDataPort, notificationPort);
+                autoServiceDataPort, inventoryDataPort, notificationPort, metricsPort);
     }
 }

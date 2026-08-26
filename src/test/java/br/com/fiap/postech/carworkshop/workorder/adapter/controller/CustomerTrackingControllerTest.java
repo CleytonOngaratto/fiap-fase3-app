@@ -7,6 +7,7 @@ import br.com.fiap.postech.carworkshop.workorder.adapter.presenter.WorkOrderTrac
 import br.com.fiap.postech.carworkshop.workorder.domain.entity.StatusWO;
 import br.com.fiap.postech.carworkshop.workorder.usecase.port.in.WorkOrderUseCase;
 import io.quarkus.test.InjectMock;
+import io.quarkus.test.security.TestSecurity;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.ws.rs.core.MediaType;
 import org.junit.jupiter.api.BeforeEach;
@@ -35,6 +36,7 @@ class CustomerTrackingControllerTest {
     }
 
     @Test
+    @TestSecurity(user = "customer", roles = "CUSTOMER")
     void getWorkOrderStatus_Success() {
         when(useCase.findForCustomer(1L)).thenReturn(pendingResponse);
 
@@ -46,12 +48,14 @@ class CustomerTrackingControllerTest {
     }
 
     @Test
+    @TestSecurity(user = "customer", roles = "CUSTOMER")
     void getWorkOrderStatus_NotFound() {
         when(useCase.findForCustomer(999L)).thenThrow(new EntityNotFoundException("Work Order not found."));
         given().contentType(MediaType.APPLICATION_JSON).when().get("/tracking/999").then().statusCode(404);
     }
 
     @Test
+    @TestSecurity(user = "customer", roles = "CUSTOMER")
     void approveBudget_Success() {
         WorkOrderTrackingResponse inProgress = new WorkOrderTrackingResponse(1L, StatusWO.IN_PROGRESS, "ABC1234",
                 null, new BigDecimal("250.00"), List.of(), List.of(), false);
@@ -65,12 +69,14 @@ class CustomerTrackingControllerTest {
     }
 
     @Test
+    @TestSecurity(user = "customer", roles = "CUSTOMER")
     void approveBudget_WorkOrderNotFound() {
         when(useCase.approveWorkOrder(999L)).thenThrow(new EntityNotFoundException("Work Order not found."));
         given().contentType(MediaType.APPLICATION_JSON).when().post("/tracking/999/approve").then().statusCode(404);
     }
 
     @Test
+    @TestSecurity(user = "customer", roles = "CUSTOMER")
     void approveBudget_InvalidState() {
         when(useCase.approveWorkOrder(1L))
                 .thenThrow(new InvalidOperationException("Budget can only be approved when status is PENDING_APPROVAL."));
@@ -78,12 +84,14 @@ class CustomerTrackingControllerTest {
     }
 
     @Test
+    @TestSecurity(user = "customer", roles = "CUSTOMER")
     void approveBudget_InsufficientStock() {
         when(useCase.approveWorkOrder(1L)).thenThrow(new StockException("Insufficient stock for part: Filtro de óleo"));
         given().contentType(MediaType.APPLICATION_JSON).when().post("/tracking/1/approve").then().statusCode(422);
     }
 
     @Test
+    @TestSecurity(user = "customer", roles = "CUSTOMER")
     void rejectBudget_Success() {
         WorkOrderTrackingResponse canceled = new WorkOrderTrackingResponse(1L, StatusWO.CANCELED, "ABC1234",
                 null, new BigDecimal("250.00"), List.of(), List.of(), false);
@@ -97,12 +105,14 @@ class CustomerTrackingControllerTest {
     }
 
     @Test
+    @TestSecurity(user = "customer", roles = "CUSTOMER")
     void rejectBudget_WorkOrderNotFound() {
         when(useCase.rejectWorkOrder(999L)).thenThrow(new EntityNotFoundException("Work Order not found."));
         given().contentType(MediaType.APPLICATION_JSON).when().post("/tracking/999/reject").then().statusCode(404);
     }
 
     @Test
+    @TestSecurity(user = "customer", roles = "CUSTOMER")
     void rejectBudget_InvalidState() {
         when(useCase.rejectWorkOrder(1L))
                 .thenThrow(new InvalidOperationException("Budget can only be rejected when status is PENDING_APPROVAL."));

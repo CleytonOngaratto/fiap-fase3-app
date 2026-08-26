@@ -2,7 +2,7 @@ package br.com.fiap.postech.carworkshop.workorder.adapter.controller;
 
 import br.com.fiap.postech.carworkshop.workorder.adapter.presenter.WorkOrderTrackingResponse;
 import br.com.fiap.postech.carworkshop.workorder.usecase.port.in.WorkOrderUseCase;
-import jakarta.annotation.security.PermitAll;
+import jakarta.annotation.security.RolesAllowed;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
@@ -13,7 +13,7 @@ import org.eclipse.microprofile.openapi.annotations.tags.Tag;
 
 @Path("/tracking")
 @Tag(name = "Customer Tracking")
-@PermitAll
+@RolesAllowed({"CUSTOMER", "ADMIN"})
 @Produces(MediaType.APPLICATION_JSON)
 @Consumes(MediaType.APPLICATION_JSON)
 public class WorkOrderTrackingController {
