@@ -27,6 +27,11 @@ services:
       # F9: no EKS o mesmo caminho e servido por um Secret montado (Bloco 4c).
       JWT_PUBLIC_KEY_LOCATION: file:/deployments/secrets/publicKey.pem
       JWT_PRIVATE_KEY_LOCATION: file:/deployments/secrets/privateKey.pem
+      # Sem valor: repassa do ambiente e OMITE se não existir. `${VAR:-}` mandaria string vazia,
+      # que o agente trata diferente de ausente.
+      NEW_RELIC_LICENSE_KEY:
+      # Entidade separada: tráfego de dev não polui o APM que os dashboards do Bloco 6 consultam.
+      NEW_RELIC_APP_NAME: ${NEW_RELIC_APP_NAME:-car-workshop-api-local}
     volumes:
       - ./secrets:/deployments/secrets:ro
     depends_on:

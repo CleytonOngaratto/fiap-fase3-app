@@ -567,7 +567,15 @@ trilha recomeçar na borda do cluster. O MDC é limpo na resposta: as threads s�
 um resto de MDC carimbaria a requisição seguinte com o id da anterior.
 
 ```bash
-curl -si http://localhost:8080/carworkshop/v1/q/health/ready | grep -i x-trace-id
+# O header sai em rotas JAX-RS. /q/health/ready é servido pelo SmallRye Health, que não passa
+# pelos filtros de request/response — ali o X-Trace-Id não aparece (e não deveria).
+curl -si http://localhost:8080/carworkshop/v1/customers/get-all \
+  -H "Authorization: Bearer $TOKEN" | grep -i x-trace-id
+
+# Mandando um id de entrada, ele é reaproveitado em vez de substituído:
+curl -si http://localhost:8080/carworkshop/v1/customers/get-all \
+  -H "Authorization: Bearer $TOKEN" -H "X-Trace-Id: meu-id-123" | grep -i x-trace-id
+
 curl -s  http://localhost:8080/carworkshop/v1/q/metrics | grep workorder
 ```
 
@@ -586,6 +594,67 @@ violada — ver [Arquitetura](#arquitetura).
 
 > Em dev e nos testes o log JSON fica **desligado** (`%dev`/`%test`), porque no terminal ele só
 > atrapalha a leitura. Em container ele é o default.
+
+### New Relic APM (agente Java)
+
+As três saídas acima são geradas pela aplicação. Quem as transforma em APM — transações, latência por
+rota, erros, distributed tracing — é o **agente Java do New Relic**, que só existe dentro da imagem.
+
+**Como ele entra.** O `Dockerfile` baixa `com.newrelic.agent.java:newrelic-agent` (versão pinada no
+`ARG NEWRELIC_AGENT_VERSION`) do **Maven Central**, no stage de build, e copia para o runtime. Não é
+capricho: o stage de runtime (`eclipse-temurin:17-jre-jammy`) não tem `curl` nem `wget`, e o build já
+fala com o Maven Central — puxar de outro host seria acrescentar um endpoint TLS a mais para dar
+errado. O `-javaagent` entra como elemento do array do `ENTRYPOINT`, em exec-form, para que o `java`
+continue sendo o PID 1 e o `SIGTERM` do Kubernetes chegue nele.
+
+**A license key nunca entra na imagem.** Ela vive em `/fase3/newrelic/license-key` (SSM
+SecureString) e chega por `NEW_RELIC_LICENSE_KEY` em runtime — Secret do Kubernetes no cluster,
+variável de ambiente no compose. **Sem a chave a aplicação sobe normalmente**: o agente carrega, loga
+`license_key is empty in the config. Not starting New Relic Agent.` e sai do caminho. Para desligar o
+agente por completo, `NEW_RELIC_AGENT_ENABLED=false`.
+
+```powershell
+# Local, sem gravar a chave em disco (o .env seria uma terceira cópia dela):
+$env:NEW_RELIC_LICENSE_KEY = (aws ssm get-parameter --name /fase3/newrelic/license-key `
+  --with-decryption --query Parameter.Value --output text --region us-east-1)
+# --build é obrigatório: o serviço builda do Dockerfile, e --force-recreate sozinho recria o
+# container a partir da imagem VELHA — subiria sem o agente.
+docker compose up -d --build --force-recreate oficina_app
+docker compose logs oficina_app | Select-String 'connected to collector'
+```
+
+**Logs-in-context.** A configuração está em [`docker/newrelic/newrelic.yml`](docker/newrelic/newrelic.yml),
+versionada e sem segredo. O agente **envia os logs ele mesmo** (`application_logging.forwarding`) e o
+**decorator fica desligado**. O `newrelic.yml` de referência do agente **recomenda** não usar os dois
+juntos (não impede); o argumento decisivo é outro — o decorator anexa o carimbo `NR-LINKING|…`
+*depois* da linha já formatada, o que cairia após o `}` do nosso log JSON e quebraria qualquer parser
+adiante.
+
+> ⚠️ **O stdout do container é de formato misto.** A aplicação escreve JSON; o agente escreve o
+> próprio log em texto puro no mesmo stream (`log_file_name: STDOUT`, para não exigir um diretório
+> gravável pelo uid 1001 nem esconder o diagnóstico de quem roda `kubectl logs`). Consequência
+> prática: `kubectl logs … | jq` engasga nas linhas do agente. Filtre antes —
+> `kubectl logs … | grep '^{' | jq`.
+
+O campo que correlaciona a linha de log com a requisição é o **`traceId`** do `TraceIdFilter`, não o
+`trace.id` nativo do New Relic: a instrumentação `jboss.logging` do agente 9.4.0 não emite linking
+metadata para o Quarkus (medido). Por isso o `forwarding.context_data` está **ligado**, com allowlist
+`include: traceId` — sem ele o log chega ao New Relic só com `message`/`level`/`logger`, sem nada que
+o ligue à requisição. A allowlist é explícita de propósito: se alguém puser outra coisa no MDC amanhã,
+ela não vaza para o New Relic sem uma decisão.
+
+A label `project: fiap-fase3` fica na **entidade APM** e **não** acompanha os logs — levá-la junto
+exigiria `application_logging.forwarding.labels.enabled: true` (default `false`), que não dá para
+verificar fora do painel e por isso ficou como pendência do Bloco 6. Com uma única aplicação na
+conta, o `app_name` já separa o que precisa ser separado.
+
+Na prática, no painel: `SELECT * FROM Log WHERE context.traceId = '<id do header X-Trace-Id>'`.
+
+> ⚠️ **Herança para o Bloco 4e.** O `nri-bundle` traz um Fluent Bit que despacha o stdout dos pods.
+> Com o agente já forwardando, os dois juntos entregam **cada linha duas vezes** — o bundle deve ser
+> instalado com o componente `newrelic-logging` desligado. O custo é perder o log dos pods não
+> instrumentados (kube-system, CoreDNS); aceitável aqui, porque a aplicação é a única carga do
+> cluster e ela reporta sozinha.
 
 ---
 
@@ -692,6 +761,7 @@ Academy, via LabRole) fica como trabalho futuro — lá o Terraform criaria o cl
 | SmallRye OpenAPI            | —        | Documentação Swagger automática               |
 | Quarkus Logging JSON        | —        | Logs estruturados p/ ingestão no New Relic    |
 | Micrometer + Prometheus     | —        | Métricas JVM, HTTP e de negócio (`/q/metrics`)|
+| New Relic Java Agent        | 9.4.0    | APM, distributed tracing e envio de logs      |
 | JUnit 5 · Mockito · REST-Assured · ArchUnit | — | Testes: unidade, HTTP e arquitetura        |
 | JaCoCo                      | 0.8.12   | Cobertura de testes (gate de 75% no `pom.xml`)|
 | Docker + Docker Compose     | —        | Containerização (Dockerfile multi-stage)      |
