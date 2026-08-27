@@ -35,6 +35,6 @@ common:
     metrics:
       enabled: true
 
-  # Vai para a entidade APM e, via `forwarding.labels.enabled`, também para cada log.
+  # Vai para a entidade APM e, via `forwarding.labels.enabled`, para cada log como `tags.project`.
   labels:
     project: fiap-fase3

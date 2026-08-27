@@ -636,19 +636,36 @@ adiante.
 > prática: `kubectl logs … | jq` engasga nas linhas do agente. Filtre antes —
 > `kubectl logs … | grep '^{' | jq`.
 
-O campo que correlaciona a linha de log com a requisição é o **`traceId`** do `TraceIdFilter`, não o
-`trace.id` nativo do New Relic: a instrumentação `jboss.logging` do agente 9.4.0 não emite linking
-metadata para o Quarkus (medido). Por isso o `forwarding.context_data` está **ligado**, com allowlist
-`include: traceId` — sem ele o log chega ao New Relic só com `message`/`level`/`logger`, sem nada que
-o ligue à requisição. A allowlist é explícita de propósito: se alguém puser outra coisa no MDC amanhã,
-ela não vaza para o New Relic sem uma decisão.
+Cada log forwardado chega ao New Relic com **dois** identificadores de correlação, verificados no
+payload real (`NEW_RELIC_AUDIT_MODE=true`, que loga o JSON enviado ao coletor):
 
-A label `project: fiap-fase3` fica na **entidade APM** e **não** acompanha os logs — levá-la junto
-exigiria `application_logging.forwarding.labels.enabled: true` (default `false`), que não dá para
-verificar fora do painel e por isso ficou como pendência do Bloco 6. Com uma única aplicação na
-conta, o `app_name` já separa o que precisa ser separado.
+| Campo | Origem | Serve para |
+|---|---|---|
+| `trace.id` / `span.id` | o agente, ao serializar o payload | o pulo nativo do New Relic entre APM e Log |
+| `context.traceId` | o MDC do `TraceIdFilter` (4a) | seguir o id que **entrou pelo header** `X-Trace-Id` |
 
-Na prática, no painel: `SELECT * FROM Log WHERE context.traceId = '<id do header X-Trace-Id>'`.
+Os dois importam por motivos diferentes. O `trace.id` é interno do New Relic e nasce na app. O
+`context.traceId` é o único que atravessa a borda: quando o Bloco 5 puser o API Gateway e a Lambda
+na frente, é ele que amarra a requisição inteira. Por isso o `forwarding.context_data` está
+**ligado**, com allowlist `include: traceId` — sem ele o MDC não sobe e esse elo se perde. A
+allowlist é explícita de propósito: se alguém puser outra coisa no MDC amanhã, ela não vaza para o
+New Relic sem uma decisão.
+
+A label `project: fiap-fase3` acompanha cada log como **`tags.project`** (é o que
+`forwarding.labels.enabled` faz; no default ela ficaria só na entidade APM).
+
+No painel:
+
+```sql
+-- pelo id que entrou na borda
+SELECT * FROM Log WHERE context.traceId = '<id do header X-Trace-Id>'
+-- ou pelo trace do New Relic, que também liga direto da transação no APM
+SELECT * FROM Log WHERE trace.id = '<trace>'
+```
+
+> ⚠️ Os **~118 primeiros logs do startup não chegam** ao New Relic: são emitidos antes de o
+> `LogSenderService` do agente subir, e o agente os descarta registrando em `FINER` — invisível em
+> produção. Para o log de arranque, use `kubectl logs` do pod.
 
 > ⚠️ **Herança para o Bloco 4e.** O `nri-bundle` traz um Fluent Bit que despacha o stdout dos pods.
 > Com o agente já forwardando, os dois juntos entregam **cada linha duas vezes** — o bundle deve ser
