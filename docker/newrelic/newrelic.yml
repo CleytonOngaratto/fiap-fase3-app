@@ -19,11 +19,14 @@ common:
 
     forwarding:
       enabled: true
+      log_level_denylist: TRACE,DEBUG,FINE,FINER,FINEST
       # Default false, e sem isto o log sobe sem o MDC — ou seja, sem nada que ligue a linha à
       # requisição que a gerou.
       context_data:
         enabled: true
         include: traceId
+      labels:
+        enabled: true
 
     # Anexaria seu carimbo depois do `}` do nosso log JSON.
     local_decorating:
@@ -32,6 +35,6 @@ common:
     metrics:
       enabled: true
 
-  # Fica só na entidade APM; levar aos logs exigiria `forwarding.labels.enabled` (pendência do 6).
+  # Vai para a entidade APM e, via `forwarding.labels.enabled`, também para cada log.
   labels:
     project: fiap-fase3
