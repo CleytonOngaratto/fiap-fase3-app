@@ -1,6 +1,5 @@
-# Autoescala horizontal da API. O demo do vídeo é por CPU: gerar carga → réplicas sobem.
-# Requer o metrics-server ligado (`minikube addons enable metrics-server`), senão as
-# métricas ficam <unknown> e não escala.
+# Requer o metrics-server, que no EKS vem como addon do cluster (repo 2) — sem ele as métricas ficam
+# <unknown> e não escala.
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
@@ -16,16 +15,17 @@ spec:
   minReplicas: 2
   maxReplicas: 10
   metrics:
-    # Métrica principal (a que o gerador de carga move no demo).
+    # A CPU é a métrica do demo — é ela que o gerador de carga move.
     - type: Resource
       resource:
         name: cpu
         target:
           type: Utilization
           averageUtilization: 60
-    # Métrica secundária, só para cumprir a redação do edital ("CPU/memória").
-    # ⚠️ A JVM não devolve heap ao SO: se em teste a memória fixar as réplicas no
-    # máximo, suba o request de memória do deployment OU remova este bloco (o demo é por CPU).
+    # Memória entra só para cumprir a redação do edital ("CPU/memória").
+    # ⚠️ A JVM não devolve heap ao SO: se as réplicas ficarem fixas no alto, o culpado é o
+    # requests.memory do deployment estar apertado demais — foi o que aconteceu com os 384Mi da
+    # Fase 2 depois que o agente New Relic entrou na imagem.
     - type: Resource
       resource:
         name: memory

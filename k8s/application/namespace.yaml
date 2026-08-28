@@ -1,4 +1,4 @@
-# Namespace que isola todos os recursos da solução (app + banco).
+# Namespace que isola os recursos da app. O banco não mora mais aqui: é o RDS gerenciado do repo 3.
 apiVersion: v1
 kind: Namespace
 metadata:
