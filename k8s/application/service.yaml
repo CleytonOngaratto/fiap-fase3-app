@@ -1,5 +1,9 @@
-# Service interno da API (ClusterIP). Acesso externo é via `kubectl port-forward`
-# (ou `minikube service`) no demo — não expomos NodePort/LoadBalancer aqui.
+# Sem annotation nenhuma o cloud controller do EKS provisiona um Classic LB — a forma provada no
+# smoke test do Bloco 2. `port: 80` porque o DNS deste LB é o que o API Gateway usa no /{proxy+}:
+# a URL precisa responder sem porta explícita.
+#
+# ⚠️ Antes de `terraform destroy` no repo 2: apague este Service. O ELB deixa uma ENI na subnet e
+# trava a destruição da VPC.
 apiVersion: v1
 kind: Service
 metadata:
@@ -8,10 +12,10 @@ metadata:
   labels:
     app: car-workshop-api
 spec:
-  type: ClusterIP
+  type: LoadBalancer
   selector:
     app: car-workshop-api
   ports:
     - name: http
-      port: 8080
+      port: 80
       targetPort: 8080

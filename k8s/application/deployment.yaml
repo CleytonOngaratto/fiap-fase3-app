@@ -1,4 +1,6 @@
-# Deployment da API. replicas: 2 é o piso; o HPA (hpa.yaml) assume o número real depois.
+# 🔴 `kubectl apply -f k8s/application/` não serve para este arquivo: `image:` é o placeholder
+# __IMAGE__, que o scripts/deploy.ps1 troca pela URL do ECR (carrega o account id e muda a cada
+# sessão do lab). Aplicado cru, o pod entra em ImagePullBackOff tentando puxar "__IMAGE__".
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -7,6 +9,7 @@ metadata:
   labels:
     app: car-workshop-api
 spec:
+  # Piso; o HPA assume o número real depois.
   replicas: 2
   selector:
     matchLabels:
@@ -16,30 +19,45 @@ spec:
       labels:
         app: car-workshop-api
     spec:
-      # Roda não-root (a imagem cria o uid 1001 no Dockerfile).
+      # fsGroup é o que torna o volume do JWT legível: arquivo de volume de Secret nasce root:root,
+      # e sem ele os PEMs em 0440 ficam ilegíveis pelo uid 1001 — a app quebra no boot com um erro
+      # de chave que parece PEM corrompido.
       securityContext:
         runAsNonRoot: true
         runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
       containers:
         - name: car-workshop-api
-          image: car-workshop-api:local
-          # IfNotPresent: usa a imagem carregada via `minikube image load` (não vai ao registry).
-          imagePullPolicy: IfNotPresent
+          image: __IMAGE__
+          # A tag é o SHA do commit, então o pull real acontece quando a tag muda; Always cobre o
+          # caso de a mesma tag ter sido republicada no ECR.
+          imagePullPolicy: Always
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           ports:
             - name: http
               containerPort: 8080
-          # Config não-sensível + segredos, ambos como env vars.
+          # Os dois Secrets são gerados do SSM pelo deploy.ps1; nenhum é versionado. A license key do
+          # New Relic é opcional: ausente, a var não chega ao pod e o agente não sobe.
           envFrom:
             - configMapRef:
                 name: car-workshop-api-config
             - secretRef:
-                name: car-workshop-api-secret
-          # 🔴 Probes SEPARADAS e com o root-path no caminho.
-          # startupProbe: segura liveness E readiness até a app terminar de subir.
-          # Boot lento (Quarkus + Flyway + conexão no banco), ainda mais sob CPU apertada
-          # num scale-up simultâneo (warmup de várias JVMs). Até 30×5s = 150s de tolerância;
-          # depois que passa 1x, liveness/readiness assumem. Evita restart à toa no warmup
-          # (era o Exit 143/SIGTERM por liveness timeout visto no cold start).
+                name: car-workshop-db
+            - secretRef:
+                name: car-workshop-app
+          # F9: chave RSA por volume, não env var. Em env var ela apareceria no `kubectl describe
+          # pod`, seria herdada por todo processo filho e entraria na captura de ambiente do agente
+          # New Relic.
+          volumeMounts:
+            - name: jwt-keys
+              mountPath: /deployments/secrets
+              readOnly: true
+          # A startupProbe segura liveness e readiness durante o boot lento (Quarkus + Flyway), o que
+          # evita o restart em loop por liveness timeout no cold start.
           startupProbe:
             httpGet:
               path: /carworkshop/v1/q/health/live
@@ -47,9 +65,8 @@ spec:
             periodSeconds: 5
             timeoutSeconds: 5
             failureThreshold: 30
-          # Liveness NÃO depende do banco: aponta para /live. Se apontasse para /ready
-          # (que inclui o check do Postgres), um blip do banco reiniciaria TODOS os pods.
-          # initialDelaySeconds: 0 — a startupProbe acima já cobre a janela de boot.
+          # /live e não /ready: readiness inclui o check do banco, e um blip do RDS reiniciaria
+          # TODOS os pods.
           livenessProbe:
             httpGet:
               path: /carworkshop/v1/q/health/live
@@ -58,8 +75,6 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
-          # Readiness inclui o Postgres: o pod só recebe tráfego quando o banco responde.
-          # Folgado no boot (a app espera o DB + roda Flyway).
           readinessProbe:
             httpGet:
               path: /carworkshop/v1/q/health/ready
@@ -68,16 +83,24 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 12
-          # 🔴 requests.cpu é OBRIGATÓRIO: o HPA calcula o % de utilização sobre o request.
-          # Sem ele o HPA mostra <unknown>/60% e nunca escala.
           resources:
             requests:
+              # 🔴 requests.cpu é obrigatório: o HPA calcula o % sobre o request. Sem ele fica
+              # <unknown>/60% e nunca escala.
               cpu: 200m
-              # 384Mi (não 256Mi): a JVM segura ~180Mi de heap; com request 256Mi isso
-              # dava ~70%, colado no target de 80% do HPA — sob carga de CPU a memória
-              # cruzaria 80% e prenderia réplicas no alto (JVM não devolve heap),
-              # mascarando a autoescala POR CPU. Com 384Mi, ~180Mi vira ~47% → folga.
-              memory: 384Mi
+              # 512Mi, recalibrado no EKS (era 384Mi na Fase 2, antes de o agente New Relic entrar na
+              # imagem). O pod em repouso consome 322–326Mi: sobre 384Mi dava 84%, acima do target de
+              # memória do HPA, e as réplicas subiam sem descer (a JVM não devolve heap), mascarando
+              # a autoescala por CPU.
+              memory: 512Mi
             limits:
               cpu: 500m
+              # Igual ao request: QoS Guaranteed, e o teto que a JVM usa para dimensionar o heap fica
+              # onde já estava validado.
               memory: 512Mi
+      volumes:
+        - name: jwt-keys
+          secret:
+            secretName: car-workshop-jwt
+            # 0440 + fsGroup 1001: legível pelo grupo da app, por ninguém mais.
+            defaultMode: 0440

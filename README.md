@@ -27,8 +27,7 @@ a camada de infraestrutura: **containerização** (Dockerfile multi-stage), **ma
 - [Documentação da API](#documentação-da-api)
 - [Arquitetura](#arquitetura)
 - [Banco de Dados](#banco-de-dados)
-- [Deploy em Kubernetes (Minikube)](#deploy-em-kubernetes-minikube)
-- [Provisionamento com Terraform (IaC)](#provisionamento-com-terraform-iac)
+- [Deploy no EKS (AWS)](#deploy-no-eks-aws)
 - [Testes](#testes)
 - [Observabilidade](#observabilidade)
 - [Qualidade e Segurança](#qualidade-e-segurança)
@@ -70,9 +69,9 @@ RECEIVED → UNDER_DIAGNOSIS → PENDING_APPROVAL → IN_PROGRESS → COMPLETED 
 | Maven          | 3.9+          | ou use o wrapper `./mvnw` incluso no projeto           |
 | jq             | qualquer      | usado para extrair o token JWT nos exemplos curl       |
 
-**Para deploy em Kubernetes** (opcional): `minikube` 1.38+, `kubectl` 1.32+, `terraform` 1.5+ —
-necessários **apenas** se você for seguir as seções [Deploy em Kubernetes (Minikube)](#deploy-em-kubernetes-minikube)
-e [Provisionamento com Terraform (IaC)](#provisionamento-com-terraform-iac).
+**Para deploy em Kubernetes** (opcional): `kubectl` 1.32+ e a AWS CLI v2 configurada — necessários
+**apenas** para a seção [Deploy no EKS (AWS)](#deploy-no-eks-aws), que também depende do cluster,
+do registry e do banco já provisionados pelos repositórios de infraestrutura.
 
 > **Windows:** substitua `./mvnw` por `mvnw.cmd` nos comandos de modo dev/testes.
 
@@ -172,8 +171,15 @@ A aplicação consome estas variáveis (o Quarkus faz o *override* automático d
 > e assina o token de admin do `/auth/login`.
 
 > No `docker compose` esses valores já são injetados (a app aponta para o service `oficina_db` na
-> rede interna). No Kubernetes vêm do **ConfigMap** (não sensível) + **Secret** (`SECRET_KEY`,
-> credenciais do RDS e chave JWT) — ver seção de deploy.
+> rede interna). No Kubernetes cada uma vem de um lugar diferente — ver [Deploy no EKS](#deploy-no-eks-aws):
+
+| Variável | Origem no EKS |
+|---|---|
+| `QUARKUS_*`, `DB_SSLMODE`, `JWT_*_KEY_LOCATION` | ConfigMap `car-workshop-api-config` (versionado, não sensível) |
+| `DB_HOST` `DB_PORT` `DB_NAME` `DB_USERNAME` `DB_PASSWORD` | Secret `car-workshop-db`, gerado de `/fase3/rds/*` no deploy |
+| `SECRET_KEY` | Secret `car-workshop-app`, de `/fase3/app/secret-key` (SecureString de bootstrap) |
+| `NEW_RELIC_LICENSE_KEY` | Secret `car-workshop-app`, de `/fase3/newrelic/license-key` — opcional |
+| chave RSA (os dois PEMs) | Secret `car-workshop-jwt` **montado como volume** em `/deployments/secrets`, de `/fase3/jwt/*` |
 
 ---
 
@@ -395,136 +401,166 @@ progressão do status de uma OS precisam ser atômicos.
 
 ---
 
-## Deploy em Kubernetes (Minikube)
+## Deploy no EKS (AWS)
 
-Manifestos completos em [`k8s/`](k8s) — app + banco, com **HPA** funcional (autoescala por CPU).
+Manifestos em [`k8s/application/`](k8s/application). Dois caminhos para o mesmo deploy: o **pipeline**
+([`cd.yml`](.github/workflows/cd.yml), caminho padrão — ver [CI/CD](#cicd)) e o
+[`scripts/deploy.ps1`](scripts/deploy.ps1) para rodar da máquina. A lógica é a mesma nos dois; se
+mudar um, mude o outro. O cluster (EKS), o registry (ECR) e o banco (RDS) vêm dos repositórios de
+infraestrutura — este repo só publica a imagem e aplica os manifestos.
 
-| Diretório            | Manifestos |
-|----------------------|------------|
-| `k8s/application/`   | `namespace`, `configmap`, `secret`, `deployment`, `service` (ClusterIP), `hpa` (autoscaling/v2) |
-| `k8s/database/`      | `postgres-secret`, `postgres-pvc` (1Gi), `postgres-deployment` (probes `pg_isready`), `postgres-service` |
+O pipeline ainda publica **`/fase3/eks/lb-dns`** (o DNS do LoadBalancer) no SSM ao fim do deploy: é
+por esse parâmetro que o API Gateway do repositório serverless encontra a aplicação. O `deploy.ps1`
+não publica — só imprime o DNS.
 
-> **namespace:** `car-workshop` · **app:** `car-workshop-api` · **HPA:** min 2 / max 10, CPU 60% +
-> memória 80%. As probes da app usam o **caminho com root-path**
-> (`/carworkshop/v1/q/health/live` e `/ready`); a `startupProbe` cobre o boot (Quarkus + Flyway).
+| Manifesto | O que traz |
+|---|---|
+| `namespace.yaml` | Namespace `car-workshop` |
+| `configmap.yaml` | Config não sensível: root-path, Flyway, `DB_SSLMODE=require`, caminho das chaves JWT |
+| `deployment.yaml` | 2 réplicas, imagem do ECR, probes, `requests`/`limits`, volume do JWT |
+| `service.yaml` | `type: LoadBalancer` — ELB público, `:80` → `:8080` |
+| `hpa.yaml` | `autoscaling/v2`, min 2 / max 10, CPU 60% + memória 80% |
 
-```bash
-# Pré-requisitos (uma vez)
-minikube start
-minikube addons enable metrics-server          # OBRIGATÓRIO para o HPA (senão % = <unknown>)
-docker build -t car-workshop-api:local .        # a partir da RAIZ do repositório
-minikube image load car-workshop-api:local      # sobe a imagem local sem ir ao registry
+**Não existe `secret.yaml`.** Nenhum segredo é versionado: os três Secrets são gerados pelo
+`deploy.ps1` a partir do **SSM Parameter Store**, no momento do deploy.
 
-# Aplicar (banco antes da app)
-kubectl apply -f k8s/database/
-kubectl apply -f k8s/application/
+| Secret | Chaves | Origem no SSM |
+|---|---|---|
+| `car-workshop-db` | `DB_HOST` `DB_PORT` `DB_NAME` `DB_USERNAME` `DB_PASSWORD` | `/fase3/rds/*` |
+| `car-workshop-app` | `SECRET_KEY`, `NEW_RELIC_LICENSE_KEY` | `/fase3/app/secret-key`, `/fase3/newrelic/license-key` |
+| `car-workshop-jwt` | `privateKey.pem` `publicKey.pem` — montados em `/deployments/secrets` | `/fase3/jwt/*` |
 
-# Acompanhar e verificar
-kubectl -n car-workshop rollout status deploy/car-workshop-api
-kubectl -n car-workshop get pods,svc,hpa        # o HPA deve mostrar % real, não <unknown>
+> **Por que regerar sempre:** a senha do RDS é recriada a cada `destroy` + `apply` da infraestrutura
+> de banco. Um Secret criado "uma vez" faz a app subir e **falhar ao conectar** com a credencial da
+> sessão anterior — sintoma que parece problema de rede.
 
-# Smoke test (curl roda na sua máquina; a base JRE não traz curl)
-kubectl -n car-workshop port-forward svc/car-workshop-api 8080:8080 &
-curl http://localhost:8080/carworkshop/v1/q/health/ready   # 200 {"status":"UP"}
+> **Por que a chave JWT é volume e não env var:** em env var ela apareceria no `kubectl describe
+> pod`, seria herdada por todo processo filho e entraria na captura de ambiente do agente New Relic.
+
+> A license key do New Relic é **opcional**: sem ela a app sobe normalmente, apenas sem APM.
+
+### Pré-requisitos
+
+1. EKS, ECR e RDS provisionados, com o contrato publicado em `/fase3/*`.
+2. `/fase3/app/secret-key` publicado **uma vez** (parâmetro de bootstrap — nenhum Terraform o cria):
+
+   ```powershell
+   aws ssm put-parameter --name /fase3/app/secret-key --type SecureString --region us-east-1 `
+     --value ([Convert]::ToBase64String([byte[]](1..32 | ForEach-Object { Get-Random -Maximum 256 })))
+   ```
+
+   ⚠️ **Publique e não rotacione.** É o *pepper* do hash de senha (`SECRET_KEY`): trocá-lo faz todo
+   admin já cadastrado parar de logar, com erro que parece senha errada.
+3. `kubectl` apontando para o cluster:
+
+   ```powershell
+   $cluster = aws ssm get-parameter --name /fase3/eks/cluster-name --query Parameter.Value --output text
+   aws eks update-kubeconfig --name $cluster --region us-east-1
+   ```
+
+### Deploy
+
+```powershell
+# 1. Imagem no ECR — TODA sessão, não uma vez: o repositório é criado com `force_delete`, então o
+#    `terraform destroy` da infraestrutura leva as imagens junto.
+$tag = git rev-parse --short HEAD
+$ecr = aws ssm get-parameter --name /fase3/ecr/repo-url --query Parameter.Value --output text
+aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin $ecr.Split('/')[0]
+docker build -t "${ecr}:${tag}" .
+docker push  "${ecr}:${tag}"
+
+# 2. Deploy — lê o SSM, gera os Secrets e aplica os manifestos na ordem certa
+.\scripts\deploy.ps1 -Tag $tag
 ```
+
+> ⚠️ **`kubectl apply -f k8s/application/` sozinho não funciona**, por dois motivos: o
+> `deployment.yaml` traz o placeholder `__IMAGE__` (a URL do ECR carrega o account id e muda por
+> sessão do lab, então não pode ser versionada), e o diretório é aplicado em **ordem alfabética**,
+> com `namespace.yaml` depois dos objetos que dependem dele. O `deploy.ps1` resolve os dois.
+
+> ⚠️ **Tag imutável, nunca `latest`.** Com tag fixa o *spec* do Deployment não muda, o `apply` vira
+> no-op e o `rollout status` responde *"successfully rolled out"* na hora — validando a imagem
+> **antiga**. Para republicar sob a mesma tag: `.\scripts\deploy.ps1 -Restart`.
+
+### Verificação
+
+```powershell
+kubectl -n car-workshop get pods,svc,hpa
+kubectl -n car-workshop get deploy car-workshop-api -o jsonpath='{.spec.template.spec.containers[0].image}'
+
+$lb = kubectl -n car-workshop get svc car-workshop-api -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
+curl.exe -i "http://$lb/carworkshop/v1/q/health/ready"      # 200 {"status":"UP"}
+```
+
+> **`curl.exe`, não `curl`:** no PowerShell 5.1 `curl` é alias de `Invoke-WebRequest`, que sem
+> `-UseBasicParsing` quebra em terminal não interativo. E o DNS do ELB leva ~3 min para propagar
+> depois de o hostname aparecer — antes disso a falha é de DNS, não da app.
+
+A chave privada **não** pode estar no ambiente do processo. `kubectl describe pod` não serve como
+prova: ele nunca imprime valor de Secret, então passaria mesmo se a chave estivesse em env var.
+
+```powershell
+$pod = kubectl -n car-workshop get pod -l app=car-workshop-api -o jsonpath='{.items[0].metadata.name}'
+kubectl -n car-workshop exec $pod -- ls -l /deployments/secrets     # os 2 PEMs
+kubectl -n car-workshop exec $pod -- sh -c 'env | grep -c BEGIN'    # 0
+```
+
+Agente New Relic conectado — o `--tail=-1` é **obrigatório**: com seletor o `kubectl logs` mostra só
+10 linhas, e a mensagem sai no boot.
+
+```powershell
+kubectl -n car-workshop logs -l app=car-workshop-api --tail=-1 | Select-String "connected to collector"
+```
+
+Migrations aplicadas **no banco** (não só no log). O pod lê tudo do Secret que o deploy gerou, o que
+de quebra prova que a credencial da app está correta:
+
+```powershell
+@'
+apiVersion: v1
+kind: Pod
+metadata: { name: psql, namespace: car-workshop }
+spec:
+  restartPolicy: Never
+  containers:
+    - name: psql
+      image: postgres:16
+      command: ["psql", "-c", "select version, description, success from flyway_schema_history order by installed_rank;"]
+      env:
+        - { name: PGHOST,     valueFrom: { secretKeyRef: { name: car-workshop-db, key: DB_HOST     } } }
+        - { name: PGPORT,     valueFrom: { secretKeyRef: { name: car-workshop-db, key: DB_PORT     } } }
+        - { name: PGDATABASE, valueFrom: { secretKeyRef: { name: car-workshop-db, key: DB_NAME     } } }
+        - { name: PGUSER,     valueFrom: { secretKeyRef: { name: car-workshop-db, key: DB_USERNAME } } }
+        - { name: PGPASSWORD, valueFrom: { secretKeyRef: { name: car-workshop-db, key: DB_PASSWORD } } }
+'@ | kubectl apply -f -
+kubectl -n car-workshop wait --for=jsonpath='{.status.phase}'=Succeeded pod/psql --timeout=120s
+kubectl -n car-workshop logs psql
+kubectl -n car-workshop delete pod psql --now
+```
+
+> A senha vai por `secretKeyRef`, e não em `--env=` na linha de comando: ela é gerada com
+> `*()-_=+[]{}` no alfabeto, e passar isso como argumento nativo no PowerShell 5.1 mangla o valor —
+> a falha apareceria como "erro de autenticação", mandando caçar security group.
 
 ### Demo de autoescala (HPA por CPU)
 
-Com o `metrics-server` ligado, gere carga e observe as réplicas subirem:
+O `metrics-server` vem como addon do cluster; sem ele as métricas ficam `<unknown>` e nada escala.
 
-```bash
-kubectl -n car-workshop run load --image=busybox --restart=Never -- \
-  /bin/sh -c "while true; do wget -qO- http://car-workshop-api.car-workshop.svc.cluster.local:8080/; done"
+```powershell
+kubectl -n car-workshop run load --image=busybox --restart=Never -- `
+  /bin/sh -c "while true; do wget -qO- http://car-workshop-api.car-workshop.svc.cluster.local/carworkshop/v1/q/health/live; done"
 
 kubectl -n car-workshop get hpa -w     # réplicas sobem conforme a CPU
 ```
 
----
+### Encerrando a sessão
 
-## Provisionamento com Terraform (IaC)
-
-O mesmo deploy, **versionado como código** com o provider `kubernetes` puro (sem helm) — tradução
-1:1 dos manifestos de `k8s/`. O Terraform sobe **banco + app**; o **cluster Minikube é pré-requisito
-manual** (`minikube start`).
-
-```text
-FLUXO DE DEPLOY
-  Dev/CI  ──docker build──▶  imagem car-workshop-api  ──minikube image load──▶  cluster
-  Dev/CI  ──terraform apply──────────────────────────────────────────────────▶  cluster
-
-DENTRO DO CLUSTER  (namespace car-workshop) — o que o `terraform apply` cria:
-
-  ConfigMap ─┐
-  Secret     ├──▶  Deployment car-workshop-api  ──▶  Service ClusterIP :8080
-  (creds +   │            ▲          │
-   SECRET)  ─┘            │          └──JDBC──▶  Service postgres :5432
-                         HPA                          │
-                    escala 2..10                      ▼
-                 (CPU 60% / mem 80%)          Deployment postgres  ──▶  PVC 1Gi
+```powershell
+kubectl -n car-workshop delete svc car-workshop-api
 ```
 
-```bash
-cd infra/terraform/environments/minikube
-
-# 1. Copie o molde e preencha os segredos (db_password, secret_key)
-cp ../../terraform.tfvars.example ../../terraform.tfvars   # depois edite os CHANGE_ME
-
-# 2. Init + validação (leve, não toca no cluster)
-terraform init
-terraform validate
-
-# 3. Prévia e apply
-terraform plan  "-var-file=../../terraform.tfvars"
-terraform apply "-var-file=../../terraform.tfvars"
-```
-
-> ⚠️ **Windows/PowerShell:** mantenha o `-var-file` **entre aspas** (`"-var-file=..."`), senão o
-> PowerShell quebra o argumento no `=`. As aspas são inofensivas no bash/Linux.
-
-Segredos (`db_password`, `secret_key`) **não têm default** e o `terraform.tfvars` está no
-`.gitignore` — nada é hardcoded nos `.tf` (passe por `-var-file` ou `-var`).
-
-**Estrutura** — módulos reutilizáveis + o ambiente `minikube` como raiz que os chama:
-
-```text
-infra/terraform/
-├── modules/
-│   ├── postgres/        # namespace + secret + pvc + deployment + service (Postgres 16)
-│   └── application/     # configmap + secret + deployment + service + hpa (v2) da API
-└── environments/
-    └── minikube/        # PRINCIPAL: provider aponta pro contexto minikube; chama os 2 módulos
-```
-
-**Recursos provisionados** (tradução 1:1 dos manifestos de `k8s/`):
-
-| Módulo      | Objetos Kubernetes criados |
-|-------------|-----------------------------|
-| postgres    | Namespace `car-workshop` · Secret `postgres-secret` · PVC `postgres-pvc` (1Gi) · Deployment `postgres` (probes `pg_isready`) · Service `postgres` (ClusterIP :5432) |
-| application | ConfigMap `car-workshop-api-config` · Secret `car-workshop-api-secret` (creds + `SECRET_KEY`) · Deployment `car-workshop-api` (startup/liveness/readiness) · Service `car-workshop-api` (ClusterIP :8080) · HPA (CPU 60% + mem 80%) |
-
-**Variáveis principais:**
-
-| Variável         | Default                   | Nota |
-|------------------|---------------------------|------|
-| `db_password`    | — (obrigatória)           | Senha do banco (a mesma nos 2 módulos). **Segredo.** |
-| `secret_key`     | — (obrigatória)           | Chave do hash de senha da app. **Segredo.** |
-| `db_user`        | `postgres`                | Não é segredo. |
-| `app_image`      | `car-workshop-api:local`  | Sobrescreve a imagem (ex.: tag de CI). |
-| `kube_context`   | `minikube`                | Contexto do kubeconfig. |
-| `create_cluster` | `false`                   | Se `true`, o Terraform sobe o próprio cluster (ver abaixo). |
-
-**Idempotência:** um segundo `terraform apply` dá `No changes`. O Deployment da app usa
-`ignore_changes = [spec[0].replicas]` para **não** brigar com o HPA depois que ele escala. Para
-derrubar tudo: `terraform destroy "-var-file=../../terraform.tfvars"`.
-
-**Opção — o Terraform provisiona o próprio cluster (`create_cluster`):** não é o caminho default (o
-provider `kubernetes` precisa do cluster já no `plan`), então o apply roda em **2 fases**:
-
-```bash
-terraform apply "-target=null_resource.minikube" -var create_cluster=true    # sobe minikube + metrics-server
-terraform apply "-var-file=../../terraform.tfvars" -var create_cluster=true   # sobe banco + app
-```
-
+⚠️ **Antes de destruir a infraestrutura**, apague todo Service `LoadBalancer`: o ELB deixa uma ENI na
+subnet e **trava a destruição da VPC**.
 ---
 
 ## Testes
@@ -729,34 +765,44 @@ docker run --rm -v "${PWD}:/workspace" aquasec/trivy:0.58.0 \
   > neutraliza não é apagá-lo do histórico, e sim nada mais confiar nele.
 - O par RSA em `src/test/resources/` é uma **fixture de teste** descartável, versionada de propósito:
   os testes assinam tokens offline com ela e ela nunca protege nada em execução real.
-- O Secret do Kubernetes carrega **apenas** credenciais de banco, `SECRET_KEY` e a chave JWT.
+- **Nenhum segredo é versionado.** `k8s/application/` não tem `secret.yaml`: os três Secrets
+  (`car-workshop-db`, `car-workshop-app`, `car-workshop-jwt`) são gerados do **SSM SecureString** no
+  momento do deploy, e a credencial do banco é **regerada a cada deploy** porque a senha do RDS muda
+  a cada recriação da infraestrutura.
 
 ---
 
 ## CI/CD
 
-GitHub Actions cobre o fluxo completo exigido pela Fase 2:
+GitHub Actions cobre build, qualidade e o deploy real no EKS:
 
-| Workflow                                                 | Gatilho                     | O que faz |
-|----------------------------------------------------------|-----------------------------|-----------|
-| [`maven-ci.yml`](.github/workflows/maven-ci.yml)         | push/PR na `main`           | `mvn clean verify` (build + testes + gate de cobertura) e **scan de vulnerabilidades** com Trivy |
-| [`cd.yml`](.github/workflows/cd.yml)                     | manual / push/PR na `main`  | build → imagem → sobe **Minikube efêmero** no runner → `terraform apply` (banco + app) → `rollout` + **smoke test** do `/health/ready` |
+| Workflow | Gatilho | O que faz |
+|---|---|---|
+| [`maven-ci.yml`](.github/workflows/maven-ci.yml) | push/PR na `main` | `mvn clean verify` (build + testes + gate de cobertura) e **scan de vulnerabilidades** com Trivy |
+| [`cd.yml`](.github/workflows/cd.yml) | push na `main` (exceto `**.md`) · `workflow_dispatch` | `verify` → `docker build` → **push no ECR** → `aws eks update-kubeconfig` → Secrets gerados do SSM → `kubectl apply` → `rollout status` → publica `/fase3/eks/lb-dns` → smoke test do `/q/health/ready` pelo DNS do LoadBalancer |
 
 **Análise de vulnerabilidades (Trivy):** roda no `maven-ci` e publica um relatório HTML como
 *artifact* da pipeline. Detalhes da configuração e como reproduzir local em
 [Qualidade e Segurança](#qualidade-e-segurança).
 
-> ⚠️ **O cluster do `cd.yml` é efêmero** — nasce e morre com o job. É **prova de pipeline**, não um
-> ambiente vivo (não há URL persistente). O vídeo demo e a avaliação rodam **local** (Minikube na
-> máquina), incluindo a autoescala por CPU.
+**Pré-requisito do `cd.yml` — os 3 GitHub Secrets do lab**, renovados a cada sessão (~4h):
+`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` e `AWS_SESSION_TOKEN`. O *session token* é o mais
+esquecido: sem ele o erro vem como `InvalidClientTokenId`, que parece chave errada. Para propagar os
+três aos 4 repositórios: `fiap-fase3-infra-k8s/scripts/refresh-gh-secrets.ps1 -Org <org>`.
+
+> **O `cd.yml` falha quando a sessão do lab expira, e isso é esperado.** Não o transforme em *status
+> check* obrigatório no ruleset: travaria todo merge fora do horário do laboratório. O `paths-ignore`
+> de `**.md` evita que merge só de documentação dispare deploy.
+
+> **`workflow_dispatch`:** o `terraform destroy` da infraestrutura leva o ECR junto
+> (`force_delete`), então a cada sessão do lab é preciso republicar a imagem — o disparo manual faz
+> isso **sem commit vazio**. Se a imagem voltar sob a mesma tag, o pipeline percebe que o *spec* do
+> Deployment não mudou e força um `rollout restart`; sem isso o `kubectl apply` seria no-op e o
+> `rollout status` responderia *"successfully rolled out"* na hora, validando o deploy **anterior**.
 
 ---
 
 ## Melhorias Futuras
-
-**Ambiente AWS/EKS:** o alvo provisionado nesta fase é o Minikube. Um `environments/aws-eks/` (AWS
-Academy, via LabRole) fica como trabalho futuro — lá o Terraform criaria o cluster nativamente
-(`aws_eks_cluster` + node group), também sem nenhuma credencial hardcoded.
 
 > As boas práticas de segurança **já aplicadas** (não-root, zero credencial hardcoded, Secrets)
 > estão em [Qualidade e Segurança](#qualidade-e-segurança).
@@ -782,8 +828,8 @@ Academy, via LabRole) fica como trabalho futuro — lá o Terraform criaria o cl
 | JUnit 5 · Mockito · REST-Assured · ArchUnit | — | Testes: unidade, HTTP e arquitetura        |
 | JaCoCo                      | 0.8.12   | Cobertura de testes (gate de 75% no `pom.xml`)|
 | Docker + Docker Compose     | —        | Containerização (Dockerfile multi-stage)      |
-| Kubernetes + Minikube       | —        | Orquestração e deploy                         |
-| Terraform (provider `kubernetes`) | 1.5+ | Infraestrutura como Código (banco + app)     |
+| Kubernetes (Amazon EKS)     | —        | Orquestração e deploy (Deployment, Service LB, HPA) |
+| AWS ECR · RDS PostgreSQL · SSM Parameter Store | — | Registry da imagem, banco gerenciado e contrato de configuração/segredos |
 | GitHub Actions              | —        | CI/CD (build, testes, scan, deploy)           |
 | Trivy (Aqua Security)       | 0.58.0   | Scan de vulnerabilidades no CI                |
 | SonarQube Community Edition | 10.4.1   | Análise estática de qualidade                 |

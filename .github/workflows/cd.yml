@@ -1,33 +1,50 @@
-# .github/workflows/cd.yml
+# CI/CD do Repo 4 — build, imagem no ECR e deploy no EKS.
 #
-# CD — prova do fluxo completo exigido pelo desafio (Fase 2):
-#   build -> testes -> imagem -> deploy (cluster + banco + app) via Terraform -> smoke test.
+#   push na main      -> verify -> imagem no ECR -> kubectl apply -> rollout -> /fase3/eks/lb-dns
+#   workflow_dispatch -> idem (o destroy leva o ECR junto: republica a imagem sem commit vazio)
+#   pull_request      -> NÃO roda. Quem cobre o PR é o maven-ci.yml, que não depende do lab.
 #
-# ⚠️ O cluster deste pipeline é EFÊMERO: nasce com `medyagh/setup-minikube` e MORRE junto com o
-#    job. Isto é PROVA DE PIPELINE, não um ambiente vivo — não há URL persistente. O vídeo demo e a
-#    avaliação rodam LOCAL (Minikube na máquina do dono). A autoescala por CPU é demonstrada local.
+# 🔴 As credenciais do AWS Academy são TEMPORÁRIAS (~4h) e incluem session token. Este workflow
+#    FALHA quando a sessão do lab expira, e isso é esperado — não transforme em status check
+#    obrigatório no ruleset, ou todo merge fora do horário do lab fica travado.
 #
-# 🔴 Zero credencial real hardcoded. Os segredos do Terraform (db_password, secret_key) vêm de
-#    GitHub Secrets, injetados como TF_VAR_* no env do step de apply (nunca `-var` inline, que
-#    vazaria o valor na process list e quebraria com espaços/símbolos).
-#    Pré-requisito (uma vez): cadastrar DB_PASSWORD e SECRET_KEY em
-#    Settings -> Secrets and variables -> Actions. Em PR de FORK o GitHub zera secrets; o fluxo
-#    same-repo (TechChallengePhase2 -> main) tem os secrets disponíveis.
-#
-# Nota: `maven-ci.yml` (build + test + Trivy) roda no mesmo gatilho. A dupla execução do
-# `mvn -B clean verify` é consciente: o `cd` precisa do artefato local para o `docker build`.
+# A lógica de deploy é a mesma do scripts/deploy.ps1 (caminho local, validado na AWS no Bloco 4c),
+# portada para bash. Se mudar uma, mude a outra.
 
-name: CD - Build, Image and Deploy (Minikube)
+name: CD - Build, Push to ECR and Deploy to EKS
 
 on:
-  pull_request:
-    branches: [ "main" ]
   push:
     branches: [ "main" ]
+    # Merge de documentação não deploya. Sem isto, todo merge de README feito fora do horário do lab
+    # pinta um X vermelho na main — que é onde a banca olha.
+    paths-ignore: [ "**.md" ]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+# Dois deploys simultâneos no mesmo cluster se atropelam. Sem cancel-in-progress: abortar um deploy
+# no meio deixa o Deployment em rollout parcial.
+concurrency:
+  group: cd-eks
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-1
+  NAMESPACE: car-workshop
+  APP_NAME: car-workshop-api
+  # Pinado, e não "latest": este pipeline é artefato de avaliação e precisa reproduzir daqui a
+  # meses. É a mesma versão que o deploy.ps1 usa na máquina do dono, então CI e caminho local
+  # exercitam o mesmo binário. (Skew não é o problema: v1.32 contra um servidor 1.36 foi o que
+  # rodou o Bloco 4c inteiro.)
+  KUBECTL_VERSION: v1.32.2
+
 jobs:
-  deploy:
+  # Gate de verdade: workflows separados não têm dependência entre si, então sem este job um teste
+  # quebrado chegaria ao cluster. Custo aceito: com o maven-ci.yml em paralelo e o `mvn package` de
+  # dentro do Dockerfile, o Maven roda três vezes por merge. Não "otimize" removendo daqui.
+  verify:
     runs-on: ubuntu-latest
 
     steps:
@@ -41,57 +58,303 @@ jobs:
           distribution: 'temurin'
           cache: maven
 
-      # Testes + gate de cobertura (JaCoCo minimum 0.75 no pom) rodam AQUI, não no Dockerfile.
       - name: Build and test with Maven
         run: mvn -B clean verify
 
-      # Imagem multi-stage buildada a partir da raiz. Tag `:ci` = artefato deste job (carregado no
-      # cluster efêmero via `minikube image load`, sem ida ao registry).
-      - name: Build application image
-        run: docker build -t car-workshop-api:ci .
+  deploy:
+    runs-on: ubuntu-latest
+    needs: verify
+    defaults:
+      run:
+        shell: bash
 
-      - name: Set up Terraform
-        uses: hashicorp/setup-terraform@v3
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          terraform_wrapper: false
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
 
-      # metrics-server é OBRIGATÓRIO: sem ele o HPA mostra <unknown> e nunca escala.
-      - name: Start Minikube (ephemeral)
-        uses: medyagh/setup-minikube@latest
-        with:
-          addons: metrics-server
-
-      # Carrega a imagem local no cluster. Casa com `imagePullPolicy: IfNotPresent` do deployment.
-      # Default NÃO é GHCR: pacote no GHCR nasce privado -> o minikube efêmero falharia o pull sem
-      # imagePullSecret.
-      - name: Load image into Minikube
-        run: minikube image load car-workshop-api:ci
-
-      # Segredos por TF_VAR_* (o Terraform lê TF_VAR_<nome> sozinho). app_image não é segredo -> -var.
-      - name: Terraform apply (database + app)
-        working-directory: infra/terraform/environments/minikube
-        env:
-          TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
-          TF_VAR_secret_key: ${{ secrets.SECRET_KEY }}
+      # O action acima valida as credenciais ele mesmo (chama sts:GetCallerIdentity para mascarar o
+      # account id), então com o token expirado ele falha ANTES de qualquer step nosso. Um
+      # `if: failure()` aqui é o único lugar onde a mensagem acionável ainda alcança o cenário para o
+      # qual foi escrita — só é avaliado nesta posição, e fica pulado quando as credenciais passam.
+      - name: Lab session expirada?
+        if: failure()
         run: |
-          terraform init
-          terraform apply -auto-approve -var app_image=car-workshop-api:ci
+          echo "::error::Credencial do AWS Academy expirou ou esta invalida (a sessao dura ~4h)."
+          echo "::error::Abra o lab, atualize ~/.aws/credentials e rode, no repo de infra:"
+          echo "::error::  fiap-fase3-infra-k8s/scripts/refresh-gh-secrets.ps1 -Org CleytonOngaratto"
+          echo "::error::O AWS_SESSION_TOKEN e obrigatorio; sem ele o erro vem como InvalidClientTokenId."
 
-      # Espera os dois deployments ficarem prontos. A startupProbe da app tolera até ~150s de boot.
+      # Cobre o caso que o action não cobre: token válido, mas sem permissão.
+      - name: Check lab session
+        run: aws sts get-caller-identity
+
+      # Contrato F8: nada de ARN/endpoint hardcodado entre repos. Estes dois não são sensíveis, então
+      # podem trafegar pelo GITHUB_ENV.
+      - name: Read contract from SSM
+        run: |
+          set -euo pipefail
+          repo2="repo 2 (fiap-fase3-infra-k8s) - rode o terraform apply la primeiro"
+
+          read_param() {
+            local name="$1"
+            if ! aws ssm get-parameter --name "$name" --query Parameter.Value --output text \
+                 --region "$AWS_REGION" 2>/dev/null | tr -d '\r'; then
+              echo "::error::SSM: parametro '$name' ausente. Quem publica: $repo2" >&2
+              return 1
+            fi
+          }
+
+          ecr=$(read_param /fase3/ecr/repo-url)
+          cluster=$(read_param /fase3/eks/cluster-name)
+
+          {
+            echo "ECR_REPO=$ecr"
+            echo "CLUSTER_NAME=$cluster"
+            echo "IMAGE=${ecr}:${GITHUB_SHA}"
+          } >> "$GITHUB_ENV"
+
+          echo "ECR     : $ecr"
+          echo "cluster : $cluster"
+
+      - name: Log in to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # 🔴 Tag = SHA do commit, NUNCA latest. Com tag fixa o spec do Deployment não muda, o apply
+      # vira no-op e o rollout status responde "successfully rolled out" na hora, referindo-se ao
+      # deploy ANTERIOR — pipeline verde tendo deployado nada.
+      #
+      # `docker build` direto, sem --cache-to type=gha: o COPY src invalida a camada do mvn package
+      # a cada commit e cache mount não é exportável para o cache do GHA. O BuildKit default do
+      # runner continua obrigatório (o Dockerfile usa `# syntax=` e RUN --mount=type=cache).
+      - name: Build and push image to ECR
+        run: |
+          set -euo pipefail
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: ${{ env.KUBECTL_VERSION }}
+
+      # O deploy.ps1 confere o contexto atual do kubectl contra /fase3/eks/cluster-name porque o
+      # kubeconfig do dono pode apontar para outro lugar. Aqui não há o que divergir: o kubeconfig
+      # nasce neste run, do mesmo valor de SSM que acabamos de ler. O echo fica como evidência.
+      - name: Configure kubeconfig
+        run: |
+          set -euo pipefail
+          aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$AWS_REGION"
+          kubectl config current-context
+
+      # A ordem importa duas vezes: `kubectl apply -f <dir>` processa em ordem ALFABÉTICA, e o
+      # namespace.yaml viria depois dos objetos que dependem dele; e o ConfigMap precisa existir
+      # antes do Deployment que o referencia em envFrom, senão o pod fica em
+      # CreateContainerConfigError queimando o timeout do rollout.
+      - name: Apply Namespace and ConfigMap
+        run: |
+          set -euo pipefail
+          kubectl apply -f k8s/application/namespace.yaml
+          kubectl apply -f k8s/application/configmap.yaml
+
+      # Um único step de propósito: os valores nunca atravessam GITHUB_ENV nem outputs (o GITHUB_ENV
+      # de um step fica legível por todos os seguintes). O YAML é montado com base64 em memória, como
+      # no deploy.ps1 — nada de --from-literal, que expõe o valor na process list, e nenhum PEM em
+      # disco.
+      #
+      # Regenerados a TODO deploy: a senha do RDS é recriada a cada destroy+apply do repo 3, e um
+      # Secret criado "uma vez" faz a app subir e falhar ao conectar com a credencial da sessão
+      # anterior — sintoma que parece problema de rede.
+      - name: Render Secrets from SSM
+        run: |
+          set -euo pipefail
+
+          repo3="repo 3 (fiap-fase3-infra-db) - os parametros so saem quando a instancia fica available"
+          boot="bootstrap manual do dono; sobrevive ao destroy, nenhum Terraform o cria"
+          boot_key="$boot. Publicar UMA vez e NUNCA rotacionar: o valor entra no hash da senha do admin"
+
+          ssm() {
+            local name="$1" source="$2"
+            shift 2
+            local value
+            if ! value=$(aws ssm get-parameter --name "$name" --query Parameter.Value \
+                         --output text --region "$AWS_REGION" "$@" 2>/dev/null | tr -d '\r'); then
+              echo "::error::SSM: parametro '$name' ausente ou ilegivel. Quem publica: $source" >&2
+              return 1
+            fi
+            printf '%s' "$value"
+          }
+
+          mask() { if [ -n "${1:-}" ]; then echo "::add-mask::$1"; fi; }
+
+          db_host=$(ssm /fase3/rds/endpoint "$repo3")
+          db_port=$(ssm /fase3/rds/port     "$repo3")
+          db_name=$(ssm /fase3/rds/db-name  "$repo3")
+          db_user=$(ssm /fase3/rds/username "$repo3")
+          db_pass=$(ssm /fase3/rds/password "$repo3" --with-decryption); mask "$db_pass"
+
+          jwt_private=$(ssm /fase3/jwt/private-key "$boot" --with-decryption)
+          jwt_public=$(ssm /fase3/jwt/public-key   "$boot" --with-decryption)
+
+          # Obrigatório: sem ele a app SOBE e concatena a string literal "null" no hash de senha.
+          app_key=$(ssm /fase3/app/secret-key "$boot_key" --with-decryption); mask "$app_key"
+
+          # Opcional: sem a license key o agente não sobe e a app funciona igual, só sem APM.
+          nr_key=$(aws ssm get-parameter --name /fase3/newrelic/license-key --with-decryption \
+                   --query Parameter.Value --output text --region "$AWS_REGION" 2>/dev/null | tr -d '\r' || true)
+          mask "$nr_key"
+
+          # ⚠️ ::add-mask:: é no-op em valor multilinha (o GitHub mascara linha a linha), então para
+          # os PEMs a única proteção é não ecoar o texto plano. O que se mascara é a forma base64,
+          # que é linha única. E o $(...) come o newline final: o PEM precisa terminar em newline,
+          # daí o printf '%s\n' nos dois.
+          b64_jwt_private=$(printf '%s\n' "$jwt_private" | base64 -w0); mask "$b64_jwt_private"
+          b64_jwt_public=$(printf '%s\n' "$jwt_public" | base64 -w0)
+          b64_db_pass=$(printf '%s' "$db_pass" | base64 -w0); mask "$b64_db_pass"
+          b64_app_key=$(printf '%s' "$app_key" | base64 -w0); mask "$b64_app_key"
+
+          apply_secret() {
+            local name="$1"
+            shift
+            {
+              echo "apiVersion: v1"
+              echo "kind: Secret"
+              echo "metadata:"
+              echo "  name: $name"
+              echo "  namespace: $NAMESPACE"
+              echo "  labels:"
+              echo "    app: $APP_NAME"
+              echo "type: Opaque"
+              echo "data:"
+              printf '  %s\n' "$@"
+            } | kubectl apply -f - > /dev/null
+            echo "secret/$name - $# chave(s)"
+          }
+
+          # /fase3/rds/endpoint é o host puro, sem porta (a porta vem no parâmetro próprio).
+          apply_secret car-workshop-db \
+            "DB_HOST: $(printf '%s' "$db_host" | base64 -w0)" \
+            "DB_PORT: $(printf '%s' "$db_port" | base64 -w0)" \
+            "DB_NAME: $(printf '%s' "$db_name" | base64 -w0)" \
+            "DB_USERNAME: $(printf '%s' "$db_user" | base64 -w0)" \
+            "DB_PASSWORD: $b64_db_pass"
+
+          app_pairs=("SECRET_KEY: $b64_app_key")
+          if [ -n "$nr_key" ]; then
+            app_pairs+=("NEW_RELIC_LICENSE_KEY: $(printf '%s' "$nr_key" | base64 -w0)")
+          else
+            echo "::warning::/fase3/newrelic/license-key ausente - a app sobe sem o agente (sem APM no New Relic)."
+          fi
+          apply_secret car-workshop-app "${app_pairs[@]}"
+
+          # Montado como VOLUME pelo deployment.yaml, não como env var: chave privada em env aparece
+          # no kubectl describe pod, é herdada por todo processo filho e entra na captura de
+          # ambiente do agente New Relic.
+          apply_secret car-workshop-jwt \
+            "privateKey.pem: $b64_jwt_private" \
+            "publicKey.pem: $b64_jwt_public"
+
+      # A generation sobe a cada mudança de spec: comparar antes/depois diz se o apply mudou alguma
+      # coisa. Comparar só a imagem daria falso alarme quando a mudança está em resources/env/probe.
+      - name: Apply Deployment, Service and HPA
+        run: |
+          set -euo pipefail
+
+          before=$(kubectl -n "$NAMESPACE" get deploy "$APP_NAME" \
+                   -o jsonpath='{.metadata.generation}' 2>/dev/null || true)
+
+          # A URL do ECR carrega o account id e muda por sessão do lab: versioná-la violaria o
+          # contrato F8, então o manifesto traz o placeholder e quem deploya substitui.
+          if ! grep -q '__IMAGE__' k8s/application/deployment.yaml; then
+            echo "::error::deployment.yaml sem o placeholder __IMAGE__ - alguem hardcodou a URL do ECR?"
+            exit 1
+          fi
+          sed "s|__IMAGE__|${IMAGE}|" k8s/application/deployment.yaml | kubectl apply -f -
+
+          # Arquivo a arquivo, nunca `apply -f k8s/application/`: o diretório reaplicaria namespace e
+          # configmap e passaria o deployment.yaml cru, com o literal __IMAGE__ -> ImagePullBackOff.
+          kubectl apply -f k8s/application/service.yaml
+          kubectl apply -f k8s/application/hpa.yaml
+
+          after=$(kubectl -n "$NAMESPACE" get deploy "$APP_NAME" -o jsonpath='{.metadata.generation}')
+
+          if [ -n "$before" ] && [ "$before" = "$after" ]; then
+            echo "::notice::Spec do Deployment inalterado (imagem republicada sob a mesma tag): forcando rollout restart."
+            kubectl -n "$NAMESPACE" rollout restart "deployment/$APP_NAME"
+          fi
+
+      # 600s e não 300s: no primeiro deploy o pull é frio (imagem + agente New Relic), são 2 réplicas
+      # e a startupProbe sozinha tolera 150s.
       - name: Wait for rollout
-        run: |
-          kubectl -n car-workshop rollout status deploy/postgres --timeout=180s
-          kubectl -n car-workshop rollout status deploy/car-workshop-api --timeout=300s
+        run: kubectl -n "$NAMESPACE" rollout status "deployment/$APP_NAME" --timeout=600s
 
-      # Loga pods + services + HPA (o HPA deve mostrar % real, não <unknown>).
-      - name: Show cluster state
-        run: kubectl -n car-workshop get pods,svc,hpa
-
-      # Smoke test do health real (com root-path). O curl roda no runner, não no pod (a base JRE
-      # não traz curl). port-forward em background + retry cobre a janela final de readiness.
-      - name: Smoke test /health/ready
+      # Entrega do 4d e o que destrava o Bloco 5: o ANY /{proxy+} do API Gateway lê este parâmetro.
+      # Contrato: HOSTNAME PURO, sem esquema, sem porta e sem path — mesma disciplina do
+      # /fase3/rds/endpoint. Quem monta o http:// é o consumidor.
+      - name: Publish /fase3/eks/lb-dns
         run: |
-          kubectl -n car-workshop port-forward svc/car-workshop-api 8080:8080 &
-          sleep 5
-          curl --retry 12 --retry-delay 5 --retry-all-errors -fsS \
-            http://localhost:8080/carworkshop/v1/q/health/ready
+          set -euo pipefail
+
+          lb=""
+          for _ in $(seq 1 30); do
+            lb=$(kubectl -n "$NAMESPACE" get svc "$APP_NAME" \
+                 -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)
+            if [ -n "$lb" ]; then break; fi
+            sleep 10
+          done
+
+          if [ -z "$lb" ]; then
+            echo "::error::O ELB nao reportou hostname em 5 min."
+            echo "::error::kubectl -n $NAMESPACE describe svc $APP_NAME mostra o evento (procure AccessDenied)."
+            exit 1
+          fi
+
+          echo "LB_DNS=$lb" >> "$GITHUB_ENV"
+
+          aws ssm put-parameter --name /fase3/eks/lb-dns --type String --overwrite \
+            --value "$lb" \
+            --description "DNS do LoadBalancer da app (repo 4). Hostname puro: o consumidor monta a URL." \
+            --region "$AWS_REGION" > /dev/null
+
+          # put-parameter --overwrite não aceita --tags; a tag vai numa chamada separada e é
+          # cosmética (alinha com o Project=fiap-fase3 dos parâmetros criados por Terraform).
+          aws ssm add-tags-to-resource --resource-type Parameter --resource-id /fase3/eks/lb-dns \
+            --tags Key=Project,Value=fiap-fase3 Key=ManagedBy,Value=github-actions Key=Repo,Value=fiap-fase3-app \
+            --region "$AWS_REGION" > /dev/null \
+            || echo "::warning::Nao consegui taguear /fase3/eks/lb-dns (o parametro esta publicado; a tag e cosmetica)."
+
+          echo "/fase3/eks/lb-dns = $lb"
+
+      # --retry-all-errors é o que faz o curl repetir em falha de RESOLUÇÃO DNS, que é exatamente o
+      # modo de falha dos primeiros ~3 min de um ELB recém-criado. Sem ele o curl desiste na hora.
+      - name: Smoke test /q/health/ready
+        run: |
+          set -euo pipefail
+          curl -fsS --retry 30 --retry-delay 10 --retry-all-errors --connect-timeout 10 \
+            "http://${LB_DNS}/carworkshop/v1/q/health/ready"
+          echo
+
+      - name: Deployment summary
+        if: success()
+        run: |
+          {
+            echo "### Deploy no EKS"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Imagem | \`$IMAGE\` |"
+            echo "| Cluster | \`$CLUSTER_NAME\` |"
+            echo "| LoadBalancer | \`$LB_DNS\` |"
+            echo "| Health | http://$LB_DNS/carworkshop/v1/q/health/ready |"
+            echo ""
+            echo '```'
+            kubectl -n "$NAMESPACE" get pods,svc,hpa
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
