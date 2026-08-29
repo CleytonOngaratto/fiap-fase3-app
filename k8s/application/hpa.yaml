@@ -13,7 +13,9 @@ spec:
     kind: Deployment
     name: car-workshop-api
   minReplicas: 2
-  maxReplicas: 10
+  # 6 é o que dois t3.medium comportam com 896Mi por pod (~6048Mi livres). Com o teto em 10 o HPA
+  # prometeria réplicas que ficariam Pending.
+  maxReplicas: 6
   metrics:
     # A CPU é a métrica do demo — é ela que o gerador de carga move.
     - type: Resource

@@ -88,16 +88,17 @@ spec:
               # 🔴 requests.cpu é obrigatório: o HPA calcula o % sobre o request. Sem ele fica
               # <unknown>/60% e nunca escala.
               cpu: 200m
-              # 512Mi, recalibrado no EKS (era 384Mi na Fase 2, antes de o agente New Relic entrar na
-              # imagem). O pod em repouso consome 322–326Mi: sobre 384Mi dava 84%, acima do target de
-              # memória do HPA, e as réplicas subiam sem descer (a JVM não devolve heap), mascarando
-              # a autoescala por CPU.
-              memory: 512Mi
+              # 896Mi vem da aritmética do HPA, não do consumo (o pod usa ~350Mi). Como
+              # desired = ceil(replicas × utilização/target), descer de n para n−1 exige utilização
+              # abaixo de target × (n−1)/n — 53%, não 80%. Com 512Mi o pod ficava em 68%: abaixo do
+              # alvo e mesmo assim travado, que é o que o 4c não viu. Dimensionado com o heap cheio
+              # (220Mi de não-heap + 25% do limite): 49,6% aqui, 53,6% com 768Mi — que ainda trava.
+              memory: 896Mi
             limits:
               cpu: 500m
-              # Igual ao request: QoS Guaranteed, e o teto que a JVM usa para dimensionar o heap fica
-              # onde já estava validado.
-              memory: 512Mi
+              # Igual ao request (QoS Guaranteed). O limite é o teto do heap da JVM
+              # (MaxRAMPercentage 25%), então mexer aqui refaz a conta acima.
+              memory: 896Mi
       volumes:
         - name: jwt-keys
           secret:
