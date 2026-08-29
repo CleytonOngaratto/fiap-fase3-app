@@ -403,9 +403,15 @@ progressão do status de uma OS precisam ser atômicos.
 
 ## Deploy no EKS (AWS)
 
-Manifestos em [`k8s/application/`](k8s/application), deploy em [`scripts/deploy.ps1`](scripts/deploy.ps1).
-O cluster (EKS), o registry (ECR) e o banco (RDS) vêm dos repositórios de infraestrutura — este repo
-só publica a imagem e aplica os manifestos.
+Manifestos em [`k8s/application/`](k8s/application). Dois caminhos para o mesmo deploy: o **pipeline**
+([`cd.yml`](.github/workflows/cd.yml), caminho padrão — ver [CI/CD](#cicd)) e o
+[`scripts/deploy.ps1`](scripts/deploy.ps1) para rodar da máquina. A lógica é a mesma nos dois; se
+mudar um, mude o outro. O cluster (EKS), o registry (ECR) e o banco (RDS) vêm dos repositórios de
+infraestrutura — este repo só publica a imagem e aplica os manifestos.
+
+O pipeline ainda publica **`/fase3/eks/lb-dns`** (o DNS do LoadBalancer) no SSM ao fim do deploy: é
+por esse parâmetro que o API Gateway do repositório serverless encontra a aplicação. O `deploy.ps1`
+não publica — só imprime o DNS.
 
 | Manifesto | O que traz |
 |---|---|
@@ -768,31 +774,35 @@ docker run --rm -v "${PWD}:/workspace" aquasec/trivy:0.58.0 \
 
 ## CI/CD
 
-GitHub Actions cobre o fluxo completo exigido pela Fase 2:
+GitHub Actions cobre build, qualidade e o deploy real no EKS:
 
-| Workflow                                                 | Gatilho                     | O que faz |
-|----------------------------------------------------------|-----------------------------|-----------|
-| [`maven-ci.yml`](.github/workflows/maven-ci.yml)         | push/PR na `main`           | `mvn clean verify` (build + testes + gate de cobertura) e **scan de vulnerabilidades** com Trivy |
-| [`cd.yml`](.github/workflows/cd.yml)                     | manual / push/PR na `main`  | build → imagem → sobe **Minikube efêmero** no runner → `terraform apply` (banco + app) → `rollout` + **smoke test** do `/health/ready` |
+| Workflow | Gatilho | O que faz |
+|---|---|---|
+| [`maven-ci.yml`](.github/workflows/maven-ci.yml) | push/PR na `main` | `mvn clean verify` (build + testes + gate de cobertura) e **scan de vulnerabilidades** com Trivy |
+| [`cd.yml`](.github/workflows/cd.yml) | push na `main` (exceto `**.md`) · `workflow_dispatch` | `verify` → `docker build` → **push no ECR** → `aws eks update-kubeconfig` → Secrets gerados do SSM → `kubectl apply` → `rollout status` → publica `/fase3/eks/lb-dns` → smoke test do `/q/health/ready` pelo DNS do LoadBalancer |
 
 **Análise de vulnerabilidades (Trivy):** roda no `maven-ci` e publica um relatório HTML como
 *artifact* da pipeline. Detalhes da configuração e como reproduzir local em
 [Qualidade e Segurança](#qualidade-e-segurança).
 
-> 🔴 **O `cd.yml` está desatualizado e falhando.** Ele é herança da Fase 2: sobe um Minikube efêmero
-> e chama `terraform apply` em `infra/terraform/environments/minikube`, pasta que **não existe mais**
-> neste repositório. O deploy real hoje é o do EKS, por `scripts/deploy.ps1` — este workflow será
-> substituído por build → push no ECR → `kubectl apply`. Nenhum *status check* obrigatório depende
-> dele, então o merge não é bloqueado.
+**Pré-requisito do `cd.yml` — os 3 GitHub Secrets do lab**, renovados a cada sessão (~4h):
+`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` e `AWS_SESSION_TOKEN`. O *session token* é o mais
+esquecido: sem ele o erro vem como `InvalidClientTokenId`, que parece chave errada. Para propagar os
+três aos 4 repositórios: `fiap-fase3-infra-k8s/scripts/refresh-gh-secrets.ps1 -Org <org>`.
+
+> **O `cd.yml` falha quando a sessão do lab expira, e isso é esperado.** Não o transforme em *status
+> check* obrigatório no ruleset: travaria todo merge fora do horário do laboratório. O `paths-ignore`
+> de `**.md` evita que merge só de documentação dispare deploy.
+
+> **`workflow_dispatch`:** o `terraform destroy` da infraestrutura leva o ECR junto
+> (`force_delete`), então a cada sessão do lab é preciso republicar a imagem — o disparo manual faz
+> isso **sem commit vazio**. Se a imagem voltar sob a mesma tag, o pipeline percebe que o *spec* do
+> Deployment não mudou e força um `rollout restart`; sem isso o `kubectl apply` seria no-op e o
+> `rollout status` responderia *"successfully rolled out"* na hora, validando o deploy **anterior**.
 
 ---
 
 ## Melhorias Futuras
-
-**Pipeline de CD para o EKS:** o deploy no EKS já está descrito em
-[Deploy no EKS (AWS)](#deploy-no-eks-aws) e é feito por `scripts/deploy.ps1`. Falta automatizá-lo no
-GitHub Actions (build → push no ECR → `kubectl apply` → `rollout status`), substituindo o `cd.yml`
-de Minikube — ver o aviso na seção [CI/CD](#cicd).
 
 > As boas práticas de segurança **já aplicadas** (não-root, zero credencial hardcoded, Secrets)
 > estão em [Qualidade e Segurança](#qualidade-e-segurança).
