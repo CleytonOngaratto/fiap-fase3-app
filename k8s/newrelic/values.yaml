@@ -1,0 +1,106 @@
+# Values do chart newrelic/nri-bundle, instalado por scripts/install-newrelic-k8s.ps1.
+# O "porquê" de cada escolha está no README, em Observabilidade → New Relic (infraestrutura K8s).
+#
+# Todo subchart aparece explícito porque no 8.0.22 os defaults NÃO são todos `false`.
+
+global:
+  # cluster vem por --set, de /fase3/eks/cluster-name.
+  customSecretName: newrelic-license
+  customSecretLicenseKey: licenseKey
+  lowDataMode: true
+
+newrelic-infrastructure:
+  enabled: true
+
+  # O control plane do EKS é gerenciado pela AWS e não é scrapeável: ligado, cria um DaemonSet que
+  # não agenda em nó nenhum.
+  controlPlane:
+    enabled: false
+
+  # Os requests do chart (150M por container) são dimensionados para clusters bem maiores que este
+  # e competem com o teto do HPA da aplicação. Os limits ficam no default: é o limit que protege
+  # contra pico, o request é reserva de agendamento.
+  kubelet:
+    kubelet:
+      resources:
+        requests:
+          cpu: 50m
+          memory: 100M
+    agent:
+      resources:
+        requests:
+          cpu: 50m
+          memory: 100M
+
+  # `nrk8s-ksm` tem podAffinity pelo kube-state-metrics: os dois caem no MESMO nó, e é ele que
+  # passa a limitar quantas réplicas da aplicação cabem.
+  ksm:
+    ksm:
+      resources:
+        requests:
+          cpu: 50m
+          memory: 100M
+    forwarder:
+      resources:
+        requests:
+          cpu: 50m
+          memory: 100M
+
+# Estado dos workloads. Sem ele o painel mostra nós e pods, mas não a saúde do que roda neles.
+kube-state-metrics:
+  enabled: true
+  # Sem `resources` o chart deixa o pod BestEffort: invisível ao agendador e primeiro da fila de
+  # despejo — o monitoramento morreria justamente quando o nó aperta.
+  resources:
+    requests:
+      cpu: 10m
+      memory: 48Mi
+    limits:
+      memory: 128Mi
+
+# Eventos do cluster: scheduling, OOMKill, falha de probe.
+nri-kube-events:
+  enabled: true
+  # BestEffort pelo mesmo motivo do kube-state-metrics.
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      memory: 128Mi
+  forwarder:
+    resources:
+      requests:
+        cpu: 10m
+        memory: 48Mi
+      limits:
+        memory: 128Mi
+
+# 🔴 O agente Java já forwarda o stdout da aplicação. Este subchart sobe um Fluent Bit que despacha
+# O MESMO stdout: juntos, cada linha chega duas vezes. Custo aceito: perde-se o log dos pods não
+# instrumentados, irrelevante porque a aplicação é a única carga do cluster.
+newrelic-logging:
+  enabled: false
+
+# Vem LIGADO no default. É um MutatingWebhook no caminho de criação de cada pod, inclusive durante
+# a autoescala, e o 4e não precisa dele.
+nri-metadata-injection:
+  enabled: false
+
+# Fora de escopo.
+nri-prometheus:
+  enabled: false
+newrelic-prometheus-agent:
+  enabled: false
+newrelic-k8s-metrics-adapter:
+  enabled: false
+newrelic-infra-operator:
+  enabled: false
+k8s-agents-operator:
+  enabled: false
+nr-ebpf-agent:
+  enabled: false
+newrelic-pixie:
+  enabled: false
+pixie-chart:
+  enabled: false
