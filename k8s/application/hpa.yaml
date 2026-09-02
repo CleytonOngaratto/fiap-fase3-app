@@ -13,9 +13,11 @@ spec:
     kind: Deployment
     name: car-workshop-api
   minReplicas: 2
-  # 6 é o que dois t3.medium comportam com 896Mi por pod (~6048Mi livres). Com o teto em 10 o HPA
-  # prometeria réplicas que ficariam Pending.
-  maxReplicas: 6
+  # 5, e não 6: o nri-bundle do New Relic (4e) concentra seus Deployments num nó só (podAffinity
+  # entre nrk8s-ksm e kube-state-metrics), e o bin-packing é por nó. Medido: sobram 1867Mi no nó
+  # leve (mais 2 pods de 896Mi) e 1688Mi no pesado (mais 1). Um teto de 6 pediria uma réplica que
+  # ficaria Pending.
+  maxReplicas: 5
   metrics:
     # A CPU é a métrica do demo — é ela que o gerador de carga move.
     - type: Resource

@@ -419,7 +419,7 @@ não publica — só imprime o DNS.
 | `configmap.yaml` | Config não sensível: root-path, Flyway, `DB_SSLMODE=require`, caminho das chaves JWT |
 | `deployment.yaml` | 2 réplicas, imagem do ECR, probes, `requests`/`limits`, volume do JWT |
 | `service.yaml` | `type: LoadBalancer` — ELB público, `:80` → `:8080` |
-| `hpa.yaml` | `autoscaling/v2`, min 2 / max 10, CPU 60% + memória 80% |
+| `hpa.yaml` | `autoscaling/v2`, min 2 / max 5, CPU 60% + memória 80% |
 
 **Não existe `secret.yaml`.** Nenhum segredo é versionado: os três Secrets são gerados pelo
 `deploy.ps1` a partir do **SSM Parameter Store**, no momento do deploy.
@@ -703,11 +703,116 @@ SELECT * FROM Log WHERE trace.id = '<trace>'
 > `LogSenderService` do agente subir, e o agente os descarta registrando em `FINER` — invisível em
 > produção. Para o log de arranque, use `kubectl logs` do pod.
 
-> ⚠️ **Herança para o Bloco 4e.** O `nri-bundle` traz um Fluent Bit que despacha o stdout dos pods.
-> Com o agente já forwardando, os dois juntos entregam **cada linha duas vezes** — o bundle deve ser
-> instalado com o componente `newrelic-logging` desligado. O custo é perder o log dos pods não
-> instrumentados (kube-system, CoreDNS); aceitável aqui, porque a aplicação é a única carga do
-> cluster e ela reporta sozinha.
+### New Relic — infraestrutura Kubernetes (`nri-bundle`)
+
+O agente Java reporta a **aplicação**. Quem reporta o **cluster** — nós, pods, deployments, eventos —
+é o chart [`nri-bundle`](https://github.com/newrelic/nri-bundle), instalado por
+[`scripts/install-newrelic-k8s.ps1`](scripts/install-newrelic-k8s.ps1) com os valores de
+[`k8s/newrelic/values.yaml`](k8s/newrelic/values.yaml).
+
+É um **release Helm separado**: não passa pelo `cd.yml` (que aplica `k8s/application/` arquivo a
+arquivo) nem pelo `deploy.ps1`. Como a infraestrutura é destruída entre sessões, o release vai junto
+— rode o script a cada sessão, depois que o cluster existir.
+
+```powershell
+.\scripts\install-newrelic-k8s.ps1              # instala/atualiza (idempotente)
+.\scripts\install-newrelic-k8s.ps1 -Uninstall   # remove release e namespace
+```
+
+**Pré-requisito: `helm`.** Não vem com o Docker Desktop e esta máquina não tem `winget`/`choco`/
+`scoop`, então a instalação é manual. O script falha com este bloco na mensagem se não encontrar o
+binário:
+
+```powershell
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+$ver = "v3.21.4"; $zip = "helm-$ver-windows-amd64.zip"
+Invoke-WebRequest "https://get.helm.sh/$zip"           -OutFile "$env:TEMP\$zip"        -UseBasicParsing
+Invoke-WebRequest "https://get.helm.sh/$zip.sha256sum" -OutFile "$env:TEMP\$zip.sha256" -UseBasicParsing
+$exp = ((Get-Content "$env:TEMP\$zip.sha256" -Raw).Trim() -split '\s+')[0]
+if ($exp -ne (Get-FileHash "$env:TEMP\$zip" -Algorithm SHA256).Hash.ToLower()) { throw "SHA256 não confere" }
+Expand-Archive "$env:TEMP\$zip" -DestinationPath "$env:TEMP\helm-x" -Force
+New-Item -ItemType Directory -Force "$env:LOCALAPPDATA\Programs\helm" | Out-Null
+Copy-Item "$env:TEMP\helm-x\windows-amd64\helm.exe" "$env:LOCALAPPDATA\Programs\helm\"
+$env:PATH = "$env:LOCALAPPDATA\Programs\helm;$env:PATH"
+```
+
+> `Invoke-WebRequest`, **não** o `curl` do Git Bash: o IWR usa o repositório de certificados do
+> Windows, onde a raiz do antivírus desta máquina está confiada. O curl do Git traz CA bundle
+> próprio e leva `x509`.
+
+**Componentes.** O chart é um guarda-chuva de subcharts. A versão está **pinada** (`8.0.22`) pelo
+mesmo motivo da tag da imagem: este repositório é artefato de avaliação e precisa reproduzir daqui a
+meses. Todos aparecem explícitos no `values.yaml`, inclusive os que já são default — no 8.0.22 os
+defaults **não** são todos `false`:
+
+| Subchart | | Por quê |
+|---|---|---|
+| `newrelic-infrastructure` | ✅ | DaemonSet que raspa o kubelet: nós e pods |
+| `kube-state-metrics` | ✅ | estado dos workloads (deployments, replicasets) |
+| `nri-kube-events` | ✅ | eventos do cluster (scheduling, OOMKill, falha de probe) |
+| `newrelic-logging` | ❌ | 🔴 ver abaixo |
+| `newrelic-infrastructure.controlPlane` | ❌ | o control plane do EKS é gerenciado pela AWS e não é scrapeável; ligado, cria um DaemonSet que não agenda em nó nenhum |
+| `nri-metadata-injection` | ❌ | **vem ligado no default** — ver abaixo |
+| `nri-prometheus`, `newrelic-prometheus-agent`, `newrelic-k8s-metrics-adapter`, `newrelic-infra-operator`, `k8s-agents-operator`, `nr-ebpf-agent`, `newrelic-pixie`, `pixie-chart` | ❌ | fora de escopo |
+
+> 🔴 **`newrelic-logging` fica desligado — é a decisão central desta integração.** O agente Java já
+> forwarda o stdout da aplicação (`newrelic.source = logs.APM`). O `newrelic-logging` sobe um Fluent
+> Bit que despacha **o mesmo stdout**: juntos, cada linha chega **duas vezes**, dobrando a ingestão e
+> falseando qualquer NRQL de log. O custo aceito é perder o log dos pods não instrumentados
+> (kube-system, CoreDNS) — irrelevante aqui, porque a aplicação é a única carga do cluster e ela
+> reporta sozinha. A garantia é estrutural, não de configuração: `helm template` com estes valores
+> não renderiza **nenhum** objeto de Fluent Bit, e o script confere no fim que não há DaemonSet de
+> logging no namespace.
+
+**A license key nunca vai para o Helm.** O script a lê de `/fase3/newrelic/license-key` (SSM
+SecureString — a mesma do agente Java), monta um Secret em memória e aplica por stdin; o chart o
+consome por `global.customSecretName`. Nem `--set` (que exporia a chave na *process list*) nem
+values file (que seria uma segunda cópia dela em disco).
+
+**Memória: o bundle disputa o teto do HPA, e a conta é POR NÓ.** O `nrk8s-ksm` tem `podAffinity` pelo
+`kube-state-metrics`, então ele, o KSM e o `nri-kube-events` caem **todos no mesmo nó** — o bundle
+não se distribui. Medido no cluster, com as 2 réplicas de base rodando:
+
+| | nó leve | nó pesado |
+|---|---|---|
+| allocatable | 3294Mi | 3294Mi |
+| kube-system | 340Mi | 200Mi |
+| New Relic | 191Mi (só o DaemonSet) | **509Mi** (os mesmos 191Mi + 319Mi dos 3 Deployments) |
+| livre depois da réplica de base | 1867Mi | 1688Mi |
+| **réplicas de 896Mi que cabem** | **3** | **2** |
+
+Daí o `maxReplicas: 5` do [`hpa.yaml`](k8s/application/hpa.yaml), que antes era 6. Não é margem de
+segurança: um teto de 6 pediria uma réplica que ficaria `Pending`. Baixar os `requests` do bundle
+para recuperar a sexta foi descartado — dependeria da distribuição de pods do dia, e a infraestrutura
+é recriada entre sessões sem o agendador reproduzir a mesma alocação. Um teto de 5 determinístico
+vale mais que um 6 que depende de sorte.
+
+> Os `requests` do chart (150M por container) são dimensionados para clusters muito maiores que este
+> — o `values.yaml` os reduz para 100M e explicita os do `kube-state-metrics`/`nri-kube-events`, que
+> vêm **vazios**. Sem request o pod é BestEffort: invisível ao agendador (a conta de capacidade vira
+> mentira) e o primeiro a ser despejado quando o nó aperta, ou seja o monitoramento morre justamente
+> quando é necessário. Os **limits** ficam no default: quem protege contra pico é o limit, o request
+> é reserva de agendamento.
+
+No painel:
+
+```sql
+FROM K8sNodeSample       SELECT uniqueCount(nodeName) WHERE clusterName = 'fiap-fase3-eks'
+FROM K8sPodSample        SELECT count(*) WHERE clusterName = 'fiap-fase3-eks' FACET namespaceName
+FROM K8sDeploymentSample SELECT latest(podsDesired), latest(podsReady) WHERE deploymentName = 'car-workshop-api'
+FROM InfrastructureEvent SELECT count(*) WHERE category = 'kubernetes'
+
+-- o que NÃO pode acontecer: só 'logs.APM' pode aparecer nesta faceta
+FROM Log SELECT count(*) WHERE entity.name = 'car-workshop-api' FACET newrelic.source
+```
+
+> **Se algum dashboard precisar do pulo APM → Kubernetes** (a aba *Kubernetes* dentro da entidade
+> APM), o que falta é o `nri-metadata-injection`: ponha `enabled: true` no `values.yaml` e reinicie a
+> aplicação (`kubectl -n car-workshop rollout restart deployment/car-workshop-api`) — ele injeta os
+> metadados na **criação** do pod, então os já existentes não recebem. Ficou desligado porque é um
+> MutatingWebhook no caminho de criação de cada pod, inclusive durante a autoescala, e o Bloco 4e não
+> precisa dele: nós, pods, deployments e eventos vêm do agente de infraestrutura com o
+> kube-state-metrics.
 
 ---
 
