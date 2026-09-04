@@ -23,7 +23,9 @@ import java.util.List;
 public class WorkOrderJpaEntity extends PanacheEntityBase {
 
     @Id
-    @GeneratedValue
+    // allocationSize = 1 matches the sequence's INCREMENT BY 1; the default of 50 overlaps blocks.
+    @GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "work_orders_seq")
+    @SequenceGenerator(name = "work_orders_seq", sequenceName = "work_orders_seq", allocationSize = 1)
     public Long id;
 
     @Column(name = "customer_id")

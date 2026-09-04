@@ -13,11 +13,9 @@ spec:
     kind: Deployment
     name: car-workshop-api
   minReplicas: 2
-  # 5, e não 6: o nri-bundle do New Relic (4e) concentra seus Deployments num nó só (podAffinity
-  # entre nrk8s-ksm e kube-state-metrics), e o bin-packing é por nó. Medido: sobram 1867Mi no nó
-  # leve (mais 2 pods de 896Mi) e 1688Mi no pesado (mais 1). Um teto de 6 pediria uma réplica que
-  # ficaria Pending.
-  maxReplicas: 5
+  # Teto por bin-packing, não por escolha: o newrelic-prometheus-agent pede 160Mi e caiu no nó leve,
+  # que passou a comportar 2 réplicas de 896Mi em vez de 3. Recalcule com install-newrelic-k8s.ps1.
+  maxReplicas: 4
   metrics:
     # A CPU é a métrica do demo — é ela que o gerador de carga move.
     - type: Resource

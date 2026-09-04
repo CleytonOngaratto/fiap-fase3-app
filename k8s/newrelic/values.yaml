@@ -87,11 +87,47 @@ newrelic-logging:
 nri-metadata-injection:
   enabled: false
 
-# Fora de escopo.
+# Aposentado pela New Relic em favor do newrelic-prometheus-agent abaixo.
 nri-prometheus:
   enabled: false
+
+# Leva as métricas de negócio do Micrometer ao New Relic: sem ele elas existem só no /q/metrics de
+# cada pod, por instância, raspadas por ninguém.
 newrelic-prometheus-agent:
-  enabled: false
+  enabled: true
+
+  # O chart entrega `resources` vazio, e sem request o pod é BestEffort: invisível ao agendador e
+  # primeiro a ser despejado. Mesma armadilha do kube-state-metrics no 4e.
+  resources:
+    prometheus:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        memory: 256Mi
+    configurator:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+      limits:
+        memory: 64Mi
+
+  config:
+    # O `integrations_filter` global (default true) restringe o job `default` a uma allowlist de
+    # nomes conhecidos, e ignoraria a app em silêncio. Em vez de desligá-lo, usamos o job `newrelic`,
+    # que o chart já define sem filtro — daí a annotation `newrelic.io/scrape` no deployment.
+    kubernetes:
+      jobs:
+        - job_name_prefix: newrelic
+          fallback_scrape_protocol: PrometheusText0.0.4
+          integrations_filter:
+            enabled: false
+          target_discovery:
+            pod: true
+            endpoints: false
+            filter:
+              annotations:
+                newrelic.io/scrape: true
 newrelic-k8s-metrics-adapter:
   enabled: false
 newrelic-infra-operator:

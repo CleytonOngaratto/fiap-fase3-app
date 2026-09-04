@@ -18,6 +18,13 @@ spec:
     metadata:
       labels:
         app: car-workshop-api
+      # `newrelic.io/scrape` e não `prometheus.io/scrape`: o job default do agente só aceita uma
+      # allowlist de nomes conhecidos e ignoraria a app em silêncio. Porta e path são obrigatórios —
+      # o default do agente é 9102, e o root-path do Quarkus move o endpoint.
+      annotations:
+        newrelic.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/carworkshop/v1/q/metrics"
     spec:
       # fsGroup é o que torna o volume do JWT legível: arquivo de volume de Secret nasce root:root,
       # e sem ele os PEMs em 0440 ficam ilegíveis pelo uid 1001 — a app quebra no boot com um erro

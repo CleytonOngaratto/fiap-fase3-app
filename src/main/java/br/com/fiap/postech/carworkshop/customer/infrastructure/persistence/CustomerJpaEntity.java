@@ -18,7 +18,9 @@ import lombok.Setter;
 public class CustomerJpaEntity extends PanacheEntityBase {
 
     @Id
-    @GeneratedValue
+    // allocationSize = 1 matches the sequence's INCREMENT BY 1; the default of 50 overlaps blocks.
+    @GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "customers_seq")
+    @SequenceGenerator(name = "customers_seq", sequenceName = "customers_seq", allocationSize = 1)
     public Long id;
 
     private String name;
