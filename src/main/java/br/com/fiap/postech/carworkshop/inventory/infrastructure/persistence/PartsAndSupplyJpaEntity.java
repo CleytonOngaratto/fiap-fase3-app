@@ -21,7 +21,9 @@ import java.math.BigDecimal;
 public class PartsAndSupplyJpaEntity extends PanacheEntityBase {
 
     @Id
-    @GeneratedValue
+    // allocationSize = 1 matches the sequence's INCREMENT BY 1; the default of 50 overlaps blocks.
+    @GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "parts_and_supply_seq")
+    @SequenceGenerator(name = "parts_and_supply_seq", sequenceName = "parts_and_supply_seq", allocationSize = 1)
     public Long id;
 
     private String code;

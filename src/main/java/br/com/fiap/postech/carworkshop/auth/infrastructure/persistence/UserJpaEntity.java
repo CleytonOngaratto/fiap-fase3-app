@@ -22,7 +22,9 @@ import java.util.ArrayList;
 public class UserJpaEntity extends PanacheEntityBase {
 
     @Id
-    @GeneratedValue
+    // allocationSize = 1 matches the sequence's INCREMENT BY 1; the default of 50 overlaps blocks.
+    @GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "users_seq")
+    @SequenceGenerator(name = "users_seq", sequenceName = "users_seq", allocationSize = 1)
     public Long id;
 
     private String username;
