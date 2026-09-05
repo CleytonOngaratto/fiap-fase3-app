@@ -1,0 +1,39 @@
+{
+  "policyName": "Car Workshop — Fase 3",
+  "incidentPreference": "PER_CONDITION",
+  "conditions": [
+    {
+      "name": "Falha no processamento de OS",
+      "description": "Erros 5xx nas rotas de ordem de serviço. Verifique os logs do pod e a conexão com o RDS. Conta apenas 5xx: 4xx é regra de negócio (transição de status inválida), não falha da aplicação.",
+      "nrql": "SELECT filter(sum(http_server_requests_seconds_count), WHERE outcome = 'SERVER_ERROR') OR 0 FROM Metric WHERE app = 'car-workshop-api' AND uri LIKE '%work-orders%'",
+      "thresholdCritical": 0,
+      "thresholdDurationSeconds": 300,
+      "operator": "ABOVE",
+      "signalAggregationWindowSeconds": 60,
+      "expirationDurationSeconds": 1200,
+      "openViolationOnExpiration": false
+    },
+    {
+      "name": "Latência alta na API",
+      "description": "Latência média acima de 2s por 5 minutos; o normal é 80–120ms. Verifique CPU e memória dos pods e a latência do RDS. Sem tráfego esta condição fica sem sinal, e isso é esperado.",
+      "nrql": "SELECT sum(http_server_requests_seconds_sum)/sum(http_server_requests_seconds_count) FROM Metric WHERE app = 'car-workshop-api' AND outcome = 'SUCCESS'",
+      "thresholdCritical": 2,
+      "thresholdDurationSeconds": 300,
+      "operator": "ABOVE",
+      "signalAggregationWindowSeconds": 60,
+      "expirationDurationSeconds": 1200,
+      "openViolationOnExpiration": false
+    },
+    {
+      "name": "Healthcheck down",
+      "description": "Nenhum pod respondendo ao scrape por 5 minutos. Verifique `kubectl -n car-workshop get pods` e os targets do ELB. Dispara por AUSÊNCIA de sinal: a aplicação fora do ar para de enviar dado.",
+      "nrql": "SELECT sum(up) FROM Metric WHERE app = 'car-workshop-api' AND metricName = 'up'",
+      "thresholdCritical": 1,
+      "thresholdDurationSeconds": 300,
+      "operator": "BELOW",
+      "signalAggregationWindowSeconds": 60,
+      "expirationDurationSeconds": 300,
+      "openViolationOnExpiration": true
+    }
+  ]
+}
