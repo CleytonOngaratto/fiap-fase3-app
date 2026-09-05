@@ -23,6 +23,7 @@ import br.com.fiap.postech.carworkshop.workorder.usecase.port.out.WorkOrderRepos
 import lombok.extern.slf4j.Slf4j;
 
 import java.time.Duration;
+import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.Collections;
 import java.util.Comparator;
@@ -94,7 +95,7 @@ public class WorkOrderInteractor implements WorkOrderUseCase {
         );
         WorkOrder saved = workOrderRepository.save(workOrder);
         log.info("Work Order {} created.", saved.getId());
-        metricsPort.recordStatusChange(saved.getStatus());
+        recordTransition(saved);
         return WorkOrderResponse.from(saved);
     }
 
@@ -155,7 +156,7 @@ public class WorkOrderInteractor implements WorkOrderUseCase {
         workOrder.generateBudget();
         WorkOrder saved = workOrderRepository.save(workOrder);
         log.info("Diagnosis for Work Order {} completed. Budget: R$ {}", id, saved.getBudgetValue());
-        metricsPort.recordStatusChange(saved.getStatus());
+        recordTransition(saved);
         return DiagnosisResponse.from(saved);
     }
 
@@ -166,7 +167,7 @@ public class WorkOrderInteractor implements WorkOrderUseCase {
         workOrder.completeService();
         WorkOrder saved = workOrderRepository.save(workOrder);
         log.info("Work Order {} completed.", id);
-        metricsPort.recordStatusChange(saved.getStatus());
+        recordTransition(saved);
         metricsPort.recordCompletion(Duration.between(saved.getCreationDate(), saved.getEndDate()));
         notificationPort.notifyCompleted(new WorkOrderNotificationPort.CompletedNotification(
                 saved.getId(), saved.getCustomerId(), saved.getCustomerEmail()));
@@ -180,7 +181,7 @@ public class WorkOrderInteractor implements WorkOrderUseCase {
         workOrder.deliverVehicle();
         WorkOrder saved = workOrderRepository.save(workOrder);
         log.info("Work Order {} delivered.", id);
-        metricsPort.recordStatusChange(saved.getStatus());
+        recordTransition(saved);
         return WorkOrderDetailResponse.from(saved);
     }
 
@@ -199,7 +200,7 @@ public class WorkOrderInteractor implements WorkOrderUseCase {
         workOrder.getParts().forEach(part -> inventoryDataPort.consumeStock(part.getId()));
         WorkOrder saved = workOrderRepository.save(workOrder);
         log.info("Work Order {} approved. Status: {}", id, saved.getStatus());
-        metricsPort.recordStatusChange(saved.getStatus());
+        recordTransition(saved);
         return WorkOrderTrackingResponse.from(saved);
     }
 
@@ -210,7 +211,7 @@ public class WorkOrderInteractor implements WorkOrderUseCase {
         workOrder.rejectBudget();
         WorkOrder saved = workOrderRepository.save(workOrder);
         log.info("Work Order {} rejected. Status: {}", id, saved.getStatus());
-        metricsPort.recordStatusChange(saved.getStatus());
+        recordTransition(saved);
         return WorkOrderTrackingResponse.from(saved);
     }
 
@@ -222,5 +223,14 @@ public class WorkOrderInteractor implements WorkOrderUseCase {
                 .mapToLong(wo -> ChronoUnit.MINUTES.between(wo.getCreationDate(), wo.getEndDate()))
                 .sum();
         return totalMinutes / 60.0 / completed.size();
+    }
+
+    // Toda transição alimenta as duas métricas: o contador (quantas OS por status) e o timer (quanto
+    // tempo a OS levou para chegar nele). Juntas é o que os dashboards do Bloco 6 consultam.
+    private void recordTransition(WorkOrder workOrder) {
+        metricsPort.recordStatusChange(workOrder.getStatus());
+        metricsPort.recordTimeToStatus(
+                workOrder.getStatus(),
+                Duration.between(workOrder.getCreationDate(), LocalDateTime.now()));
     }
 }

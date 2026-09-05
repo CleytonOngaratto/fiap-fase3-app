@@ -14,4 +14,11 @@ public interface WorkOrderMetricsPort {
 
     /** {@code serviceDuration} é criação → conclusão: o "tempo médio" sem timestamp por status. */
     void recordCompletion(Duration serviceDuration);
+
+    /**
+     * Criação → o instante em que a OS alcançou {@code status}. É o "tempo médio por status" que o
+     * edital pede, obtido sem timestamp por transição no banco: cada transição mede a própria idade
+     * da OS naquele momento.
+     */
+    void recordTimeToStatus(StatusWO status, Duration sinceCreation);
 }
