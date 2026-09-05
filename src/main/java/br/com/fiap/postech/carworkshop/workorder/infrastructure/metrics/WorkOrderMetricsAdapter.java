@@ -13,6 +13,7 @@ public class WorkOrderMetricsAdapter implements WorkOrderMetricsPort {
 
     static final String STATUS_CHANGES = "workorder.status.changes";
     static final String COMPLETION_TIME = "workorder.completion.time";
+    static final String TIME_TO_STATUS = "workorder.time.to.status";
 
     private final MeterRegistry registry;
 
@@ -39,5 +40,17 @@ public class WorkOrderMetricsAdapter implements WorkOrderMetricsPort {
                 .description("Elapsed time from work order creation to service completion")
                 .register(registry)
                 .record(serviceDuration);
+    }
+
+    @Override
+    public void recordTimeToStatus(StatusWO status, Duration sinceCreation) {
+        if (status == null || sinceCreation == null || sinceCreation.isNegative()) {
+            return;
+        }
+        Timer.builder(TIME_TO_STATUS)
+                .description("Elapsed time from work order creation until it reached a given status")
+                .tag("status", status.name())
+                .register(registry)
+                .record(sinceCreation);
     }
 }

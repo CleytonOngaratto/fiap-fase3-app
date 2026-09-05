@@ -73,6 +73,33 @@ class WorkOrderMetricsAdapterTest {
         assertNull(registry.find(WorkOrderMetricsAdapter.COMPLETION_TIME).timer());
     }
 
+    @Test
+    void recordTimeToStatus_keepsOneTimerPerStatus() {
+        adapter.recordTimeToStatus(StatusWO.UNDER_DIAGNOSIS, Duration.ofMinutes(20));
+        adapter.recordTimeToStatus(StatusWO.COMPLETED, Duration.ofHours(2));
+        adapter.recordTimeToStatus(StatusWO.COMPLETED, Duration.ofHours(4));
+
+        assertEquals(1L, timerFor(StatusWO.UNDER_DIAGNOSIS).count());
+        assertEquals(2L, timerFor(StatusWO.COMPLETED).count());
+        // A média por status é o que o dashboard consulta: 2h e 4h têm de dar 3h, não 6h.
+        assertEquals(3.0, timerFor(StatusWO.COMPLETED).mean(TimeUnit.HOURS), 0.0001);
+    }
+
+    @Test
+    void recordTimeToStatus_ignoresNullAndNegative() {
+        adapter.recordTimeToStatus(null, Duration.ofMinutes(5));
+        adapter.recordTimeToStatus(StatusWO.IN_PROGRESS, null);
+        // Clock skew entre pods produz span negativo, que o Micrometer aceitaria sem reclamar.
+        adapter.recordTimeToStatus(StatusWO.IN_PROGRESS, Duration.ofMinutes(-5));
+
+        assertNull(registry.find(WorkOrderMetricsAdapter.TIME_TO_STATUS).timer());
+    }
+
+    private io.micrometer.core.instrument.Timer timerFor(StatusWO status) {
+        return registry.get(WorkOrderMetricsAdapter.TIME_TO_STATUS)
+                .tag("status", status.name()).timer();
+    }
+
     private double counterFor(StatusWO status) {
         return registry.get(WorkOrderMetricsAdapter.STATUS_CHANGES)
                 .tag("status", status.name()).counter().count();
