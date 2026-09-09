@@ -26,6 +26,7 @@ a camada de infraestrutura: **containerização** (Dockerfile multi-stage), **ma
 - [Fluxo Completo (Exemplo Rápido)](#fluxo-completo-exemplo-rápido)
 - [Documentação da API](#documentação-da-api)
 - [Arquitetura](#arquitetura)
+- [Documentação arquitetural da Fase 3](#documentação-arquitetural-da-fase-3)
 - [Banco de Dados](#banco-de-dados)
 - [Deploy no EKS (AWS)](#deploy-no-eks-aws)
 - [Testes](#testes)
@@ -279,6 +280,13 @@ dentro) com **Monólito Modular** (bounded contexts isolados por pacote, prontos
 microsserviços). O **núcleo (`domain` + `usecase`) é Java puro** — sem `jakarta.*`/`io.quarkus.*`;
 o framework mora só nas camadas externas. As regras abaixo são **impostas por testes** (ArchUnit).
 
+### Documentação arquitetural da Fase 3
+
+A evolução para a nuvem — diagrama de componentes (AWS, APIs, banco, monitoramento), diagramas de
+sequência (autenticação por CPF e abertura de OS), RFCs, ADRs e o modelo ER — está em
+[`docs/arquitetura/`](docs/arquitetura/README.md). Os diagramas C4 abaixo são o estado da Fase 2 e
+continuam válidos: a aplicação e o banco são os mesmos, agora hospedados no EKS e no RDS.
+
 ### Visão C4 (Contexto e Container)
 
 Diagramas C4 do sistema (fonte PlantUML em [`docs/c4model/`](docs/c4model)). As imagens abaixo já
@@ -397,7 +405,7 @@ progressão do status de uma OS precisam ser atômicos.
 |------------|---------------|----------------------------------------------------|
 | Dev local  | PostgreSQL 16 | `jdbc:postgresql://localhost:5433/oficina_db`      |
 | Testes     | H2 in-memory  | schema `create-drop` + seed em `import-test.sql`   |
-| Kubernetes | PostgreSQL 16 | `jdbc:postgresql://postgres.car-workshop.svc.cluster.local:5432/oficina_db` |
+| Kubernetes (EKS) | PostgreSQL 16 no RDS | montada de `DB_HOST`/`DB_PORT`/`DB_NAME` (Secret gerado do SSM), com `?sslmode=require` |
 
 ---
 
@@ -419,7 +427,7 @@ não publica — só imprime o DNS.
 | `configmap.yaml` | Config não sensível: root-path, Flyway, `DB_SSLMODE=require`, caminho das chaves JWT |
 | `deployment.yaml` | 2 réplicas, imagem do ECR, probes, `requests`/`limits`, volume do JWT |
 | `service.yaml` | `type: LoadBalancer` — ELB público, `:80` → `:8080` |
-| `hpa.yaml` | `autoscaling/v2`, min 2 / max 5, CPU 60% + memória 80% |
+| `hpa.yaml` | `autoscaling/v2`, min 2 / max 4, CPU 60% + memória 80% |
 
 **Não existe `secret.yaml`.** Nenhum segredo é versionado: os três Secrets são gerados pelo
 `deploy.ps1` a partir do **SSM Parameter Store**, no momento do deploy.
@@ -573,7 +581,7 @@ subnet e **trava a destruição da VPC**.
 ./mvnw test -Dtest=WorkOrderInteractorTest
 ```
 
-- **Suíte:** **404 testes** automatizados, todos verdes (`./mvnw clean verify` → `BUILD SUCCESS`).
+- **Suíte:** **432 testes** automatizados, todos verdes (`./mvnw clean verify` → `BUILD SUCCESS`).
 - **Tipos:** unidade (Mockito), HTTP real (REST-Assured) e **arquitetura** (ArchUnit — trava as
   regras da Clean Architecture; uma violação nova quebra o build).
 - **Cobertura:** gate **de 75%** (BUNDLE/INSTRUCTION) via JaCoCo, configurado no `pom.xml` — o
@@ -621,6 +629,7 @@ curl -s  http://localhost:8080/carworkshop/v1/q/metrics | grep workorder
 | Métrica | Tipo | Tags | Alimenta |
 |---|---|---|---|
 | `workorder.status.changes` | counter | `status` | Volume diário de OS e distribuição entre Diagnóstico / Execução / Finalização |
+| `workorder.time.to.status` | timer | `status` | Tempo médio da criação até cada status (Diagnóstico / Aprovação / Execução / Finalização) |
 | `workorder.completion.time` | timer | — | Tempo médio de atendimento (criação → conclusão) |
 
 O caminho é `WorkOrderInteractor` → `WorkOrderMetricsPort` (porta de saída, Java puro) →
