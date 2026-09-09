@@ -1,3 +1,0 @@
-# Prints usados no README (seção "Qualidade e Segurança"):
-#   sonarqube.png  → relatório/Quality Gate do SonarQube
-#   trivy.png      → relatório de vulnerabilidades do Trivy
