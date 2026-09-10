@@ -1,13 +1,32 @@
 # Car Workshop API
 
-REST API para gestão de oficina mecânica — **FIAP Tech Challenge · Fase 2**.
+REST API para gestão de oficina mecânica — **FIAP Tech Challenge · Fase 3**.
 
-Construída com **Quarkus 3.26.3**, **Java 17**, **PostgreSQL 16** e autenticação **JWT**.
-Na Fase 2 a aplicação foi **refatorada para Clean Architecture** e ganhou toda
-a camada de infraestrutura: **containerização** (Dockerfile multi-stage), **manifestos Kubernetes**,
-**Infraestrutura como Código** (Terraform) e **pipelines CI/CD** (GitHub Actions).
+Construída com **Quarkus 3.26.3**, **Java 17**, **PostgreSQL 16** e autenticação **JWT**. A **Fase 2**
+refatorou a aplicação para **Clean Architecture** e entregou a camada de infraestrutura —
+containerização (Dockerfile multi-stage), manifestos Kubernetes, Infraestrutura como Código e
+pipelines CI/CD. Esse núcleo continua aqui, intacto e coberto por 432 testes.
 
-> 🎥 **Vídeo demo:** _(https://www.youtube.com/watch?v=ZhGXcg6D1YA)_
+A **Fase 3** leva essa aplicação para operação corporativa na **AWS**, e a mudança é de arredores, não
+de domínio: a aplicação roda no **EKS**, o banco vira **RDS PostgreSQL gerenciado**, um **API Gateway**
+passa a ser a única porta de entrada, e o cliente final autentica-se **por CPF** numa **função
+serverless (Lambda)** que assina o JWT que esta aplicação já sabia validar. Toda a infraestrutura é
+**Terraform**, distribuída em **quatro repositórios** com CI/CD independente, e a operação é observada
+no **New Relic** (APM, logs JSON correlacionados, métricas de negócio, dashboards e alertas).
+
+| # | Repositório | O que entrega |
+|---|---|---|
+| 2 | [fiap-fase3-infra-k8s](https://github.com/CleytonOngaratto/fiap-fase3-infra-k8s) | VPC, cluster EKS e registry ECR (Terraform) |
+| 3 | [fiap-fase3-infra-db](https://github.com/CleytonOngaratto/fiap-fase3-infra-db) | RDS PostgreSQL 16 e os security groups de acesso (Terraform) |
+| 4 | **fiap-fase3-app** (este) | Aplicação Quarkus, manifestos do EKS, observabilidade e CI/CD de deploy |
+| 1 | [fiap-fase3-auth-serverless](https://github.com/CleytonOngaratto/fiap-fase3-auth-serverless) | Lambda de autenticação por CPF e API Gateway (Terraform) |
+
+Os repositórios não se conhecem por configuração compartilhada: cada um publica seus resultados no
+**AWS SSM Parameter Store** sob `/fase3/*` e lê os dos outros de lá. Ordem de deploy **2 → 3 → 4 → 1**;
+de destruição, **1 → 4 → 3 → 2**. O desenho completo está na
+**[documentação arquitetural](docs/arquitetura/README.md)** (componentes, sequência, ER, 3 RFCs e 5 ADRs).
+
+> 🎥 **Vídeo demo (Fase 3):** _link a publicar_
 > 📮 **Collection da API:** a collection oficial é o **Swagger UI** embutido — suba a aplicação e
 > acesse [`/carworkshop/v1/swagger-ui`](#documentação-da-api). Cada endpoint traz *Try it out*
 > (payloads de exemplo + `curl` equivalente).
@@ -31,9 +50,9 @@ a camada de infraestrutura: **containerização** (Dockerfile multi-stage), **ma
 - [Deploy no EKS (AWS)](#deploy-no-eks-aws)
 - [Testes](#testes)
 - [Observabilidade](#observabilidade)
+- [Dashboards e alertas (New Relic)](#dashboards-e-alertas-new-relic)
 - [Qualidade e Segurança](#qualidade-e-segurança)
 - [CI/CD](#cicd)
-- [Melhorias Futuras](#melhorias-futuras)
 - [Tecnologias](#tecnologias)
 
 ---
@@ -85,12 +104,14 @@ O `Dockerfile` é **multi-stage** — o Maven compila **dentro da imagem**. Não
 
 ```bash
 # 1. Clone o repositório
-git clone https://github.com/CleytonOngaratto/FIAPchallenge.git
-cd FIAPchallenge
+git clone https://github.com/CleytonOngaratto/fiap-fase3-app.git
+cd fiap-fase3-app
 
-# 2. Provisione o par RSA do JWT — a chave não vive mais no repositório (F9).
-#    Copie o par de <raiz-do-projeto>/.secrets/ para ./secrets/ (gitignored):
-mkdir -p secrets && cp ../.secrets/*.pem secrets/
+# 2. Gere um par RSA de desenvolvimento. Nenhuma chave é versionada: em produção o par vem do
+#    AWS SSM (SecureString) e é montado como volume no pod. Este aqui é só para rodar local.
+mkdir -p secrets
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out secrets/privateKey.pem
+openssl rsa -in secrets/privateKey.pem -pubout -out secrets/publicKey.pem
 
 # 3. Suba a stack completa (app + banco PostgreSQL)
 docker compose up --build
@@ -127,8 +148,8 @@ docker compose --profile sonar up      # inclui o SonarQube em http://localhost:
 # 1. Inicia apenas o banco (exposto no host em 5433, que é o default do datasource dev)
 docker compose up -d oficina_db
 
-# 2. Garanta que ./secrets/ tem o par RSA (mesmo passo do Quick Start)
-mkdir -p secrets && cp ../.secrets/*.pem secrets/
+# 2. Garanta que ./secrets/ tem o par RSA (passo 2 do Quick Start, se ainda não fez)
+ls secrets/privateKey.pem secrets/publicKey.pem
 
 # 3. Sobe a aplicação com live coding
 ./mvnw quarkus:dev
@@ -165,7 +186,7 @@ A aplicação consome estas variáveis (o Quarkus faz o *override* automático d
 > pgjdbc negociaria TLS sozinho com o default `prefer`, mas aqui a exigência fica explícita em vez de
 > depender de um default de driver. No Postgres local do compose, `disable`.
 
-> **Chave JWT (F9):** o par RSA **não** está no repositório nem dentro da imagem. Em dev ele vem de
+> **Chave JWT:** o par RSA **não** está no repositório nem dentro da imagem. Em dev ele vem de
 > `./secrets/` (gitignored — ver Quick Start, passo 2); em produção vem do **SSM SecureString** para
 > um **Secret do Kubernetes montado como volume**, e as duas variáveis acima apontam para o
 > `mountPath`. A app precisa das **duas** chaves: ela valida o token do cliente (emitido pela Lambda)
@@ -190,7 +211,7 @@ Endpoints administrativos exigem um token JWT no header `Authorization: Bearer <
 `ADMIN`. Os endpoints de acompanhamento (`/tracking/*`) exigem **`CUSTOMER` ou `ADMIN`**. Só
 `/auth/*` é **público**. Tokens (RS256, SmallRye JWT) expiram em **1 hora**.
 
-> **Token de cliente (F10):** quem emite não é esta app — é a **Lambda de autenticação por CPF**
+> **Token de cliente:** quem emite não é esta app — é a **Lambda de autenticação por CPF**
 > (repositório `fiap-fase3-auth-serverless`). Ela assina com a **mesma chave RSA**, o mesmo issuer
 > (`https://oficina-api.com`), `groups=["CUSTOMER"]` e uma claim `cpf`. A app apenas **valida**.
 > `/auth/login` continua existindo e emite o token de `ADMIN` da operação interna.
@@ -554,12 +575,43 @@ kubectl -n car-workshop delete pod psql --now
 
 O `metrics-server` vem como addon do cluster; sem ele as métricas ficam `<unknown>` e nada escala.
 
-```powershell
-kubectl -n car-workshop run load --image=busybox --restart=Never -- `
-  /bin/sh -c "while true; do wget -qO- http://car-workshop-api.car-workshop.svc.cluster.local/carworkshop/v1/q/health/live; done"
+Um único cliente em loop **não** move o HPA: o alvo é 60% de CPU sobre o `request`, e uma requisição
+por vez em duas réplicas nem chega perto. O gerador abaixo sobe **3 pods com 8 loops concorrentes cada
+= 24 clientes**, contra `/q/openapi`, que é uma rota barata mas não trivial de serializar.
 
-kubectl -n car-workshop get hpa -w     # réplicas sobem conforme a CPU
+```powershell
+$url = "http://car-workshop-api.car-workshop.svc.cluster.local/carworkshop/v1/q/openapi"
+$loop = "for i in 1 2 3 4 5 6 7 8; do (while true; do wget -qO- $url >/dev/null 2>&1; done) & done; wait"
+1..3 | ForEach-Object { kubectl -n car-workshop run "load-$_" --image=busybox --restart=Never -- /bin/sh -c $loop }
+
+kubectl -n car-workshop get hpa -w                          # acompanhe a subida
+kubectl -n car-workshop delete pod load-1 load-2 load-3 --now   # corta a carga
 ```
+
+**Medido em 2026-09-09**, num cluster de 2 × `t3.medium` com o pacote do New Relic instalado:
+
+| Momento | CPU | Réplicas |
+|---|---|---|
+| repouso | 1–2% | 2 |
+| ~15 s de carga | 106% | 2 (primeira leitura acima do alvo) |
+| ~30 s de carga | **247%** | **4** |
+| carga sustentada | 240–245% | 4 (2 por nó, **zero `Pending`**) |
+
+A subida de 2 para 4 acontece em **um único ciclo de avaliação** (~15 s) — o HPA não sobe de degrau em
+degrau quando a utilização está muito acima do alvo, ele calcula `ceil(réplicas × utilização / alvo)`
+de uma vez e bate no teto.
+
+> **A descida é lenta de propósito, e é isso que atrapalha uma demonstração.** O padrão do Kubernetes
+> é uma janela de estabilização de **300 s** antes de reduzir, para não oscilar. Some o tempo de o
+> `metrics-server` reportar leituras novas e a queda leva vários minutos depois de a carga parar —
+> planeje isso se estiver gravando. O evento que confirma é
+> `SuccessfulRescale ... reason: All metrics below target`, visível em
+> `kubectl describe hpa car-workshop-api -n car-workshop`.
+
+> ⚠️ **Rode isto no PowerShell.** No Git Bash do Windows a conversão de caminhos do MSYS reescreve o
+> `/bin/sh` do comando para um caminho do Windows, e o pod morre em `StartError` com
+> `stat C:/Program Files/Git/usr/bin/sh: no such file or directory`. Se precisar do Git Bash,
+> prefixe com `MSYS_NO_PATHCONV=1`.
 
 ### Encerrando a sessão
 
@@ -690,7 +742,7 @@ payload real (`NEW_RELIC_AUDIT_MODE=true`, que loga o JSON enviado ao coletor):
 | `context.traceId` | o MDC do `TraceIdFilter` (4a) | seguir o id que **entrou pelo header** `X-Trace-Id` |
 
 Os dois importam por motivos diferentes. O `trace.id` é interno do New Relic e nasce na app. O
-`context.traceId` é o único que atravessa a borda: quando o Bloco 5 puser o API Gateway e a Lambda
+`context.traceId` é o único que atravessa a borda: com o API Gateway e a Lambda de autenticação
 na frente, é ele que amarra a requisição inteira. Por isso o `forwarding.context_data` está
 **ligado**, com allowlist `include: traceId` — sem ele o MDC não sobe e esse elo se perde. A
 allowlist é explícita de propósito: se alguém puser outra coisa no MDC amanhã, ela não vaza para o
@@ -728,9 +780,9 @@ arquivo) nem pelo `deploy.ps1`. Como a infraestrutura é destruída entre sessõ
 .\scripts\install-newrelic-k8s.ps1 -Uninstall   # remove release e namespace
 ```
 
-**Pré-requisito: `helm`.** Não vem com o Docker Desktop e esta máquina não tem `winget`/`choco`/
-`scoop`, então a instalação é manual. O script falha com este bloco na mensagem se não encontrar o
-binário:
+**Pré-requisito: `helm`.** Ele não vem com o Docker Desktop. Se a máquina não tiver `winget`,
+`choco` ou `scoop`, a instalação é manual — e o script falha com este bloco na própria mensagem de
+erro se não encontrar o binário:
 
 ```powershell
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
@@ -746,8 +798,8 @@ $env:PATH = "$env:LOCALAPPDATA\Programs\helm;$env:PATH"
 ```
 
 > `Invoke-WebRequest`, **não** o `curl` do Git Bash: o IWR usa o repositório de certificados do
-> Windows, onde a raiz do antivírus desta máquina está confiada. O curl do Git traz CA bundle
-> próprio e leva `x509`.
+> Windows. Em máquinas com antivírus que inspeciona HTTPS, a raiz dele está confiada ali — enquanto
+> o curl do Git traz CA bundle próprio e leva `x509`.
 
 **Componentes.** O chart é um guarda-chuva de subcharts. A versão está **pinada** (`8.0.22`) pelo
 mesmo motivo da tag da imagem: este repositório é artefato de avaliação e precisa reproduzir daqui a
@@ -762,7 +814,20 @@ defaults **não** são todos `false`:
 | `newrelic-logging` | ❌ | 🔴 ver abaixo |
 | `newrelic-infrastructure.controlPlane` | ❌ | o control plane do EKS é gerenciado pela AWS e não é scrapeável; ligado, cria um DaemonSet que não agenda em nó nenhum |
 | `nri-metadata-injection` | ❌ | **vem ligado no default** — ver abaixo |
-| `nri-prometheus`, `newrelic-prometheus-agent`, `newrelic-k8s-metrics-adapter`, `newrelic-infra-operator`, `k8s-agents-operator`, `nr-ebpf-agent`, `newrelic-pixie`, `pixie-chart` | ❌ | fora de escopo |
+| `newrelic-prometheus-agent` | ✅ | 🔴 **raspa o `/q/metrics` da aplicação** — é por ele que as métricas de negócio do Micrometer saem do pod e chegam ao New Relic. Ver abaixo |
+| `nri-prometheus` | ❌ | aposentado pela New Relic em favor do `newrelic-prometheus-agent` |
+| `newrelic-k8s-metrics-adapter`, `newrelic-infra-operator`, `k8s-agents-operator`, `nr-ebpf-agent`, `newrelic-pixie`, `pixie-chart` | ❌ | fora de escopo |
+
+> 🔴 **`newrelic-prometheus-agent` tem duas armadilhas, e a segunda é silenciosa.** (a) O chart
+> entrega `resources` **vazio**: sem `request` o pod nasce *BestEffort*, invisível ao agendador e
+> primeiro da fila de despejo — ou seja, o monitoramento morre exatamente quando o nó aperta. O
+> `values.yaml` os explicita. (b) O job `default` do agente honra a annotation `prometheus.io/scrape`,
+> **mas aplica um `integrations_filter` que só aceita uma allowlist** (redis, nginx, coredns, etcd…) —
+> e esta aplicação não está nela. Com a annotation "óbvia", o agente sobe **saudável e não coleta
+> nada**, sem erro em lugar nenhum. Por isso os pods usam **`newrelic.io/scrape`** (o job `newrelic`,
+> que o chart define sem filtro), com `prometheus.io/port: 8080` e
+> `prometheus.io/path: /carworkshop/v1/q/metrics` — o default do agente é a porta 9102, e o
+> `root-path` do Quarkus move o endpoint.
 
 > 🔴 **`newrelic-logging` fica desligado — é a decisão central desta integração.** O agente Java já
 > forwarda o stdout da aplicação (`newrelic.source = logs.APM`). O `newrelic-logging` sobe um Fluent
@@ -786,15 +851,27 @@ não se distribui. Medido no cluster, com as 2 réplicas de base rodando:
 |---|---|---|
 | allocatable | 3294Mi | 3294Mi |
 | kube-system | 340Mi | 200Mi |
-| New Relic | 191Mi (só o DaemonSet) | **509Mi** (os mesmos 191Mi + 319Mi dos 3 Deployments) |
-| livre depois da réplica de base | 1867Mi | 1688Mi |
-| **réplicas de 896Mi que cabem** | **3** | **2** |
+| New Relic — DaemonSet | 191Mi | 191Mi |
+| New Relic — Deployments (KSM, `nrk8s-ksm`, `nri-kube-events`) | — | 319Mi |
+| New Relic — `newrelic-prometheus-agent` | 160Mi | — |
+| **livre para réplicas** | 2603Mi | 2585Mi |
+| **réplicas de 896Mi que cabem** | **2** | **2** |
 
-Daí o `maxReplicas: 5` do [`hpa.yaml`](k8s/application/hpa.yaml), que antes era 6. Não é margem de
-segurança: um teto de 6 pediria uma réplica que ficaria `Pending`. Baixar os `requests` do bundle
-para recuperar a sexta foi descartado — dependeria da distribuição de pods do dia, e a infraestrutura
-é recriada entre sessões sem o agendador reproduzir a mesma alocação. Um teto de 5 determinístico
-vale mais que um 6 que depende de sorte.
+Daí o `maxReplicas: 4` do [`hpa.yaml`](k8s/application/hpa.yaml), que já foi 6 e depois 5. Não é
+margem de segurança: um teto maior pediria uma réplica que ficaria `Pending`. Cada revisão veio de um
+componente novo pesando no bin-packing — os três Deployments do bundle derrubaram o teto de 6 para 5,
+e o agente de Prometheus, de 5 para 4.
+
+⚠️ **O 4 é o teto garantido; o 5 depende de sorte na alocação.** Se o agente de Prometheus cair no nó
+*pesado* em vez do leve, o nó leve comporta 3 réplicas e o teto real vira 5 — mas isso muda a cada
+recriação da infraestrutura, porque o agendador não reproduz a mesma distribuição. Baixar os
+`requests` do bundle para garantir a quinta foi descartado pela mesma razão: um teto determinístico
+de 4 vale mais que um 5 que depende do dia. **Confira a alocação real antes de contar com ela:**
+
+```powershell
+kubectl get pods -n newrelic -o wide      # em qual nó caiu cada componente
+kubectl get pods -n car-workshop -o wide  # e se alguma réplica ficou Pending
+```
 
 > Os `requests` do chart (150M por container) são dimensionados para clusters muito maiores que este
 > — o `values.yaml` os reduz para 100M e explicita os do `kube-state-metrics`/`nri-kube-events`, que
@@ -819,9 +896,59 @@ FROM Log SELECT count(*) WHERE entity.name = 'car-workshop-api' FACET newrelic.s
 > APM), o que falta é o `nri-metadata-injection`: ponha `enabled: true` no `values.yaml` e reinicie a
 > aplicação (`kubectl -n car-workshop rollout restart deployment/car-workshop-api`) — ele injeta os
 > metadados na **criação** do pod, então os já existentes não recebem. Ficou desligado porque é um
-> MutatingWebhook no caminho de criação de cada pod, inclusive durante a autoescala, e o Bloco 4e não
+> MutatingWebhook no caminho de criação de cada pod, inclusive durante a autoescala, e a integração de infraestrutura não
 > precisa dele: nós, pods, deployments e eventos vêm do agente de infraestrutura com o
 > kube-state-metrics.
+
+---
+
+## Dashboards e alertas (New Relic)
+
+O painel e as condições de alerta **são versionados aqui** e publicados por script — não são cliques
+na interface que ninguém consegue reproduzir. Isso importa porque a infraestrutura é recriada entre
+sessões: o dashboard é reaplicado a partir do repositório, idêntico.
+
+| Artefato | Arquivo | Publicado por |
+|---|---|---|
+| Dashboard `Car Workshop — Fase 3` | [`k8s/newrelic/dashboard.json`](k8s/newrelic/dashboard.json) | [`scripts/newrelic-dashboard.ps1`](scripts/newrelic-dashboard.ps1) |
+| Política e condições `Car Workshop — Fase 3` | [`k8s/newrelic/alerts.json`](k8s/newrelic/alerts.json) | [`scripts/newrelic-alerts.ps1`](scripts/newrelic-alerts.ps1) |
+
+```powershell
+.\scripts\newrelic-dashboard.ps1     # valida as NRQL e publica o dashboard
+.\scripts\newrelic-alerts.ps1        # política, 3 condições e o canal de notificação por e-mail
+```
+
+**16 painéis em 3 páginas:**
+
+| Página | Painéis |
+|---|---|
+| **Ordens de Serviço** | volume por status · OS criadas hoje · tempo médio até cada status · tempo médio de conclusão · transições por status |
+| **API — latência e erros** | latência por rota · latência máxima · requisições por desfecho · erros por status/rota/método · taxa de erro · throughput |
+| **Infraestrutura e uptime** | pods `up` · uptime por pod · CPU e memória **em % do request** · réplicas do HPA |
+
+**3 condições de alerta**, com o e-mail de destino fora do repositório (ele vem de um parâmetro do
+SSM, porque estes repositórios são públicos):
+
+| Condição | O que dispara |
+|---|---|
+| Falha no processamento de OS | **5xx** nas rotas de ordem de serviço. 4xx fica de fora de propósito: transição de status inválida é o cliente pedindo o impossível, e alertar nisso ensina a equipe a ignorar o alerta |
+| Latência alta | acima de 2 s — cerca de 20× o valor medido em operação normal, folgado o bastante para não disparar no *cold start* da JVM |
+| Healthcheck down | **ausência de sinal** por 5 minutos |
+
+> 🔴 **O alerta de healthcheck usa ausência de sinal, não valor.** Quando a aplicação cai, ela para
+> de **enviar** dado — e uma condição que só compara valores nunca dispara, porque não chega valor
+> nenhum. Por isso ela liga `openViolationOnExpiration`: o silêncio é que abre o incidente.
+
+> **O script recusa publicar NRQL inválida.** Cada consulta é executada contra a conta antes de o
+> dashboard ir ao ar, porque painel verde e vazio é pior que painel ausente — ele parece funcionar.
+> Dois erros que só aparecem assim: `memoryWorkingSetUtilization` **não existe** em `K8sPodSample`
+> (só em `K8sContainerSample`), e filtrar `WHERE up = 1` filtra pelo **valor** da métrica, que no New
+> Relic não é atributo — as duas consultas são sintaticamente válidas e retornam vazio.
+
+> **As métricas de negócio só aparecem com tráfego corrente.** O counter do Prometheus chega ao New
+> Relic como *delta entre coletas*, e cada par (pod, status) é uma série própria que **perde o
+> primeiro incremento** como linha de base. Num ambiente recém-criado, a primeira medição vem zerada
+> — é aquecimento, não painel quebrado.
 
 ---
 
@@ -901,8 +1028,13 @@ GitHub Actions cobre build, qualidade e o deploy real no EKS:
 
 **Pré-requisito do `cd.yml` — os 3 GitHub Secrets do lab**, renovados a cada sessão (~4h):
 `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` e `AWS_SESSION_TOKEN`. O *session token* é o mais
-esquecido: sem ele o erro vem como `InvalidClientTokenId`, que parece chave errada. Para propagar os
-três aos 4 repositórios: `fiap-fase3-infra-k8s/scripts/refresh-gh-secrets.ps1 -Org <org>`.
+esquecido: sem ele o erro vem como `InvalidClientTokenId`, que parece chave errada.
+
+Para propagar os três aos 4 repositórios de uma vez existe o `scripts/refresh-gh-secrets.ps1` do
+repositório [`fiap-fase3-infra-k8s`](https://github.com/CleytonOngaratto/fiap-fase3-infra-k8s), que
+exige o [`gh` CLI](https://cli.github.com) autenticado. Sem o `gh` instalado, o caminho é o painel —
+*Settings → Secrets and variables → Actions*, em cada repositório. Eles precisam ser secrets de
+**repositório**: secret de *Environment* não chega a este workflow, que não declara `environment:`.
 
 > **O `cd.yml` falha quando a sessão do lab expira, e isso é esperado.** Não o transforme em *status
 > check* obrigatório no ruleset: travaria todo merge fora do horário do laboratório. O `paths-ignore`
@@ -913,13 +1045,6 @@ três aos 4 repositórios: `fiap-fase3-infra-k8s/scripts/refresh-gh-secrets.ps1 
 > isso **sem commit vazio**. Se a imagem voltar sob a mesma tag, o pipeline percebe que o *spec* do
 > Deployment não mudou e força um `rollout restart`; sem isso o `kubectl apply` seria no-op e o
 > `rollout status` responderia *"successfully rolled out"* na hora, validando o deploy **anterior**.
-
----
-
-## Melhorias Futuras
-
-> As boas práticas de segurança **já aplicadas** (não-root, zero credencial hardcoded, Secrets)
-> estão em [Qualidade e Segurança](#qualidade-e-segurança).
 
 ---
 
