@@ -48,7 +48,7 @@ A sequência completa, com os códigos de resposta, está em [sequencia.md](../s
 | Runtime | `nodejs22.x`, 256 MB, 15 s | 128 MB fica apertado com o SDK do SSM carregado; 15 s cobre cold start com ENI na VPC + SSM + query |
 | Execution role | `LabRole`, por `data source` | O lab não deixa criar IAM; é a única identidade com `ssm:GetParameters` e `kms:Decrypt` disponível |
 | Rede | as 2 subnets privadas; SGs `[crachá do repo 3, SG próprio]` | O crachá dá 5432 ao RDS sem criar regra em SG alheio; o SG próprio dá egress 443 (SSM, via NAT) e 53 (resolver da VPC). SGs são aditivos |
-| Empacotamento | `archive_file` + `npm ci --omit=dev` | O módulo `terraform-aws-modules/lambda/aws` empacota por script Python, ausente na máquina do projeto. Preço: `npm ci` é passo obrigatório antes do `plan` — guardado no preflight e no CI, porque sem ele o apply fica verde e a função quebra com `Cannot find module` |
+| Empacotamento | `archive_file` + `npm ci --omit=dev` | O módulo `terraform-aws-modules/lambda/aws` empacota por script Python — um runtime a mais só para empacotar, que nem toda máquina terá. Preço: `npm ci` é passo obrigatório antes do `plan` — guardado no preflight e no CI, porque sem ele o apply fica verde e a função quebra com `Cannot find module` |
 | Log group | explícito, 7 dias | Sem ele a Lambda cria um com retenção infinita que o destroy não remove |
 | Concorrência reservada | não configurada | A AWS recusa reserva que deixe a conta com menos de 100 de concorrência não reservada, e o teto do lab é 10 |
 

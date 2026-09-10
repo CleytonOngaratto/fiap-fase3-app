@@ -41,7 +41,7 @@ Escrever a VPC em recursos crus: `aws_vpc`, `aws_subnet` × 4, `aws_internet_gat
 ## Consequências
 
 - Mais linhas para manter do que o bloco do módulo — e são linhas que o `plan` mostra recurso a
-  recurso, o que ajudou a diagnosticar o node group durante o Bloco 2.
+  recurso, o que ajudou a diagnosticar o node group quando o cluster foi provisionado.
 - Sem as conveniências prontas do módulo: flow logs, IPv6, subnets de banco e de ElastiCache
   separadas, endpoints de interface. Nenhuma foi necessária.
 - `subnet_ids` do node group é *force-replacement*: alternar `enable_nat_gateway` recria o node group

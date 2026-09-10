@@ -74,7 +74,7 @@ todos, o segundo é o destino da telemetria.
 | Secrets do Kubernetes | 4 | gerados no deploy (`cd.yml`, `scripts/deploy.ps1`) | `car-workshop-db`, `car-workshop-app`, `car-workshop-jwt` — nenhum versionado; regerados do SSM a **todo** deploy porque a senha do RDS muda a cada recriação |
 | Agente Java New Relic | 4 | `Dockerfile`, `docker/newrelic/newrelic.yml` | APM + envio de logs com `context.traceId`; denylist de níveis abaixo de INFO |
 | `nri-bundle` (Helm) | 4 | `k8s/newrelic/values.yaml`, `scripts/install-newrelic-k8s.ps1` | Infraestrutura do cluster, kube-state-metrics, eventos, e o `newrelic-prometheus-agent` que raspa `/q/metrics` dos pods anotados. `newrelic-logging` **desligado** |
-| Dashboard e alertas | 4 | `k8s/newrelic/dashboard.json`, `alerts.json`, `scripts/newrelic-dashboard.ps1` | 15 painéis em 3 páginas (Ordens de Serviço, API, Infraestrutura); 3 condições; cadeia Destination → Channel → Workflow para e-mail |
+| Dashboard e alertas | 4 | `k8s/newrelic/dashboard.json`, `alerts.json`, `scripts/newrelic-dashboard.ps1` | 16 painéis em 3 páginas (Ordens de Serviço, API, Infraestrutura); 3 condições; cadeia Destination → Channel → Workflow para e-mail |
 
 ## Contrato entre repositórios (SSM Parameter Store)
 
