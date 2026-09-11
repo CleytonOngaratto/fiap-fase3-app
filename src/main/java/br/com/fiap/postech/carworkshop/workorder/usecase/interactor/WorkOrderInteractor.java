@@ -226,7 +226,7 @@ public class WorkOrderInteractor implements WorkOrderUseCase {
     }
 
     // Toda transição alimenta as duas métricas: o contador (quantas OS por status) e o timer (quanto
-    // tempo a OS levou para chegar nele). Juntas é o que os dashboards do Bloco 6 consultam.
+    // tempo a OS levou para chegar nele). Juntas é o que os dashboards consultam.
     private void recordTransition(WorkOrder workOrder) {
         metricsPort.recordStatusChange(workOrder.getStatus());
         metricsPort.recordTimeToStatus(

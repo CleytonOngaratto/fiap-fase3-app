@@ -84,8 +84,10 @@ docs/docsocultos/
 # ==========================================
 # Fase 3 — nunca versionar segredos/credenciais
 # ==========================================
-# Par RSA do JWT (F9) - dev copia de <raiz>/.secrets/; ver README.
-# O par de src/test/resources/ e OUTRO, descartavel, e segue versionado de proposito.
+# Par RSA do JWT: em producao vem do SSM (SecureString) e e montado como volume no pod; em dev voce
+# gera um par descartavel com openssl (ver README, Quick Start). Nunca versionado.
+# O par de src/test/resources/ e OUTRO, descartavel, e segue versionado de proposito: os testes
+# assinam offline com ele e ele nao protege nada em execucao real.
 secrets/
 src/main/resources/*.pem
 
@@ -96,3 +98,7 @@ kubeconfig*
 *.tfstate.*
 .terraform/
 newrelic.jar
+
+# Artefato local do deploy: guarda a tag da ultima imagem publicada a mao. E de maquina, nao do
+# projeto — e um arquivo fora de "**.md" aqui anula o paths-ignore do cd.yml e dispara um deploy.
+.deploy-tag

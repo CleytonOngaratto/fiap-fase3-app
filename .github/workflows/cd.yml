@@ -8,7 +8,7 @@
 #    FALHA quando a sessão do lab expira, e isso é esperado — não transforme em status check
 #    obrigatório no ruleset, ou todo merge fora do horário do lab fica travado.
 #
-# A lógica de deploy é a mesma do scripts/deploy.ps1 (caminho local, validado na AWS no Bloco 4c),
+# A lógica de deploy é a mesma do scripts/deploy.ps1 (caminho local, validado na AWS),
 # portada para bash. Se mudar uma, mude a outra.
 
 name: CD - Build, Push to ECR and Deploy to EKS
@@ -37,7 +37,7 @@ env:
   # Pinado, e não "latest": este pipeline é artefato de avaliação e precisa reproduzir daqui a
   # meses. É a mesma versão que o deploy.ps1 usa na máquina do dono, então CI e caminho local
   # exercitam o mesmo binário. (Skew não é o problema: v1.32 contra um servidor 1.36 foi o que
-  # rodou o Bloco 4c inteiro.)
+  # rodou todo o deploy validado.)
   KUBECTL_VERSION: v1.32.2
 
 jobs:
@@ -96,7 +96,7 @@ jobs:
       - name: Check lab session
         run: aws sts get-caller-identity
 
-      # Contrato F8: nada de ARN/endpoint hardcodado entre repos. Estes dois não são sensíveis, então
+      # Contrato entre repositorios: nada de ARN/endpoint hardcodado. Estes dois não são sensíveis, então
       # podem trafegar pelo GITHUB_ENV.
       - name: Read contract from SSM
         run: |
@@ -295,7 +295,7 @@ jobs:
       - name: Wait for rollout
         run: kubectl -n "$NAMESPACE" rollout status "deployment/$APP_NAME" --timeout=600s
 
-      # Entrega do 4d e o que destrava o Bloco 5: o ANY /{proxy+} do API Gateway lê este parâmetro.
+      # E o que destrava a borda: o ANY /{proxy+} do API Gateway lê este parâmetro.
       # Contrato: HOSTNAME PURO, sem esquema, sem porta e sem path — mesma disciplina do
       # /fase3/rds/endpoint. Quem monta o http:// é o consumidor.
       - name: Publish /fase3/eks/lb-dns

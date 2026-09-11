@@ -21,6 +21,6 @@ data:
   # o pgjdbc negocia TLS sozinho com o default `prefer`. O contrato explícito sumiria calado.
   DB_SSLMODE: require
 
-  # F9: o par RSA não está na imagem nem no git. Caminho do volume do Secret car-workshop-jwt.
+  # O par RSA não está na imagem nem no git. Caminho do volume do Secret car-workshop-jwt.
   JWT_PUBLIC_KEY_LOCATION: file:/deployments/secrets/publicKey.pem
   JWT_PRIVATE_KEY_LOCATION: file:/deployments/secrets/privateKey.pem
