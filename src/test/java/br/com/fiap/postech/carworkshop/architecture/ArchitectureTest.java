@@ -10,9 +10,9 @@ import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 import static com.tngtech.archunit.library.freeze.FreezingArchRule.freeze;
 
 /**
- * Architecture enforcement (PLAN.md, Bloco 3.1 — "travar e validar").
+ * Architecture enforcement: trava as regras da Clean Architecture.
  *
- * <p>Bloco 2 cleaned every module, so the dependency violations frozen back in Bloco 1 are now
+ * <p>Every module has since been cleaned, so the dependency violations frozen earlier are now
  * <em>burned</em> and these rules become <strong>strict</strong>: domain stays framework-free, the
  * use case layer no longer reaches into {@code infrastructure} (V2), and the {@code workorder}
  * gateways no longer touch other modules' infrastructure (V3). A regression breaks the build.</p>
@@ -56,7 +56,7 @@ class ArchitectureTest {
     }
 
     /**
-     * STRICT (V2 burned in Bloco 2): the use case layer must not reach into {@code infrastructure}.
+     * STRICT (V2): the use case layer must not reach into {@code infrastructure}.
      * No freeze — any new {@code usecase -> infrastructure} dependency breaks the build outright.
      */
     @Test
@@ -85,7 +85,7 @@ class ArchitectureTest {
     }
 
     /**
-     * STRICT (V3 burned in Bloco 2): cross-module gateways in {@code workorder} must talk to the
+     * STRICT (V3): cross-module gateways in {@code workorder} must talk to the
      * public gateways of the other modules, never their Panache repositories / infrastructure.
      * No freeze — any new reach into another module's infrastructure breaks the build outright.
      */

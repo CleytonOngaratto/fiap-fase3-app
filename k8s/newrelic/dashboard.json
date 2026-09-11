@@ -1,6 +1,6 @@
 {
   "name": "Car Workshop — Fase 3",
-  "description": "Bloco 6. Cada NRQL daqui foi executada contra a conta antes de entrar no arquivo. Os painéis de negócio dependem do newrelic-prometheus-agent (k8s/newrelic/values.yaml) raspando o /q/metrics da app: sem ele as métricas de negócio existem só por pod e o painel nasce vazio.",
+  "description": "Cada NRQL daqui foi executada contra a conta antes de entrar no arquivo. Os painéis de negócio dependem do newrelic-prometheus-agent (k8s/newrelic/values.yaml) raspando o /q/metrics da app: sem ele as métricas de negócio existem só por pod e o painel nasce vazio.",
   "permissions": "PUBLIC_READ_WRITE",
   "pages": [
     {

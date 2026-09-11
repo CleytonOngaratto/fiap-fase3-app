@@ -23,7 +23,7 @@ public class TokenUtils {
         return generateTokenString("testUser", "USER");
     }
 
-    /** Reproduz offline o token que a Lambda do Bloco 5 emite ao validar um CPF (F10). */
+    /** Reproduz offline o token que a Lambda de autenticacao emite ao validar um CPF. */
     public static String generateCustomerToken(String cpf) {
         return Jwt.issuer("https://oficina-api.com")
                 .subject(cpf)

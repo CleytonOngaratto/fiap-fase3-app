@@ -109,7 +109,7 @@ public class VehicleIntegrationTest {
                 .body("customerId", equalTo(1));
     }
 
-    // D3 — vehicle->owner binding (PLAN.md Bloco 3.2). Orphan creation is rejected and nothing is
+    // D3 — vehicle->owner binding. Orphan creation is rejected and nothing is
     // persisted. The PLAN anticipated "404/422"; the actual contract is 400 (missing owner ->
     // ValidationException) and 404 (unknown owner -> EntityNotFoundException) — same invariant.
     @Test

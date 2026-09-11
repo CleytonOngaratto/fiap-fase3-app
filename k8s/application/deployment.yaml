@@ -56,7 +56,7 @@ spec:
                 name: car-workshop-db
             - secretRef:
                 name: car-workshop-app
-          # F9: chave RSA por volume, não env var. Em env var ela apareceria no `kubectl describe
+          # Chave RSA por volume, não env var. Em env var ela apareceria no `kubectl describe
           # pod`, seria herdada por todo processo filho e entraria na captura de ambiente do agente
           # New Relic.
           volumeMounts:
