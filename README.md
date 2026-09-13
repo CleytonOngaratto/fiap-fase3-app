@@ -28,7 +28,7 @@ de destruição, **1 → 4 → 3 → 2**. O desenho completo está na
 
 > 🎥 **Vídeo demo (Fase 3):** _link a publicar_
 > 📮 **Collection da API:** a collection oficial é o **Swagger UI** embutido — suba a aplicação e
-> acesse [`/carworkshop/v1/swagger-ui`](#documentação-da-api). Cada endpoint traz *Try it out*
+> acesse [`/swagger-ui/`](#documentação-da-api). Cada endpoint traz *Try it out*
 > (payloads de exemplo + `curl` equivalente).
 
 ---
@@ -157,7 +157,7 @@ ls secrets/privateKey.pem secrets/publicKey.pem
 
 - API: `http://localhost:8080/carworkshop/v1`
 - Dev UI: `http://localhost:8080/carworkshop/v1/q/dev/`
-- Swagger UI: `http://localhost:8080/carworkshop/v1/swagger-ui`
+- Swagger UI: `http://localhost:8080/swagger-ui/`
 
 ---
 
@@ -252,8 +252,13 @@ curl -s http://localhost:8080/carworkshop/v1/customers/get-all \
 | Acompanhamento       | `/tracking`            | CUSTOMER ou ADMIN | Portal do cliente: consulta e aprovação/rejeição |
 
 Para **exemplos completos de cada endpoint** (payloads, parâmetros e respostas), use o **Swagger UI**
-(`/carworkshop/v1/swagger-ui`): o botão **Try it out** executa a chamada real e mostra o `curl`
+(`/swagger-ui/`): o botão **Try it out** executa a chamada real e mostra o `curl`
 equivalente. É a nossa collection oficial — ver [Documentação da API](#documentação-da-api).
+
+> A UI fica na **raiz do host**, e não sob `/carworkshop/v1`: `quarkus.swagger-ui.path` com barra
+> inicial é caminho absoluto. Na nuvem vale o mesmo endereço atrás do API Gateway
+> (`https://<id>.execute-api.../swagger-ui/`), porque a rota `ANY /{proxy+}` encaminha tudo.
+> Sem a barra final o servidor responde 302 para ela.
 
 ---
 
@@ -287,7 +292,7 @@ Postman/OpenAPI exportado à parte). Suba a aplicação e acesse:
 
 | Recurso       | URL                                                   |
 |---------------|-------------------------------------------------------|
-| Swagger UI    | `http://localhost:8080/carworkshop/v1/swagger-ui`     |
+| Swagger UI    | `http://localhost:8080/swagger-ui/`     |
 | OpenAPI JSON  | `http://localhost:8080/carworkshop/v1/q/openapi`      |
 
 No Swagger UI, o **Try it out** de cada endpoint executa a chamada e exibe o `curl` correspondente.
