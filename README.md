@@ -26,7 +26,7 @@ Os repositórios não se conhecem por configuração compartilhada: cada um publ
 de destruição, **1 → 4 → 3 → 2**. O desenho completo está na
 **[documentação arquitetural](docs/arquitetura/README.md)** (componentes, sequência, ER, 3 RFCs e 5 ADRs).
 
-> 🎥 **Vídeo demo (Fase 3):** _link a publicar_
+> 🎥 **Vídeo demo (Fase 3):** https://www.youtube.com/watch?v=htMQKAT2KYI
 > 📮 **Collection da API:** a collection oficial é o **Swagger UI** embutido — suba a aplicação e
 > acesse [`/swagger-ui/`](#documentação-da-api). Cada endpoint traz *Try it out*
 > (payloads de exemplo + `curl` equivalente).
