@@ -46,10 +46,10 @@ flowchart TB
     NAT -->|"chave RSA e senha"| SSM
     APP -->|"traces, logs, metricas"| NR
 
-    classDef r1 fill:#fff3e0,stroke:#ef6c00
-    classDef r2 fill:#e3f2fd,stroke:#1565c0
-    classDef r3 fill:#e8f5e9,stroke:#2e7d32
-    classDef r4 fill:#f3e5f5,stroke:#6a1b9a
+    classDef r1 fill:#fff3e0,stroke:#ef6c00,color:#7a3300
+    classDef r2 fill:#e3f2fd,stroke:#1565c0,color:#0d3c61
+    classDef r3 fill:#e8f5e9,stroke:#2e7d32,color:#14532d
+    classDef r4 fill:#f3e5f5,stroke:#6a1b9a,color:#4a148c
     class R1,R2,LBD r1
     class CLB,NAT,ECR r2
     class RDS r3
